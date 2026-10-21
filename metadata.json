@@ -1,0 +1,6 @@
+{
+  "name": "Consentia Vitality",
+  "description": "Gestión de consentimientos informados y clientes para clínicas médicas y de estética",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
