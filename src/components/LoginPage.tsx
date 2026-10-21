@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { signInWithEmail } from '../lib/supabaseClient';
-import { ShieldCheck, Lock, Mail, Eye, EyeOff, Zap } from 'lucide-react';
+import { ShieldCheck, Lock, Mail, Eye, EyeOff, ArrowRight } from 'lucide-react';
 
 interface LoginPageProps {
   onLoginSuccess: () => void;
@@ -21,7 +22,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     const { error: authError } = await signInWithEmail(email, password);
 
     if (authError) {
-      setError('Credenciales incorrectas. Verifica tu email y contraseña.');
+      setError('Email o contraseña incorrectos. Revísalos e inténtalo de nuevo.');
       setLoading(false);
     } else {
       onLoginSuccess();
@@ -29,121 +30,161 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-[#1a0010] to-slate-900 flex items-center justify-center px-4">
-      {/* Background glow */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-[#bd003c]/10 rounded-full blur-3xl" />
-      </div>
+    <div className="min-h-screen flex flex-col lg:flex-row bg-[#f7f4f6] text-slate-900 font-[Figtree,system-ui,sans-serif]">
+      {/* Brand panel — full width on mobile header, left half on desktop */}
+      <aside className="relative overflow-hidden lg:w-[46%] lg:min-h-screen px-6 pt-10 pb-8 lg:px-12 lg:py-16 flex flex-col justify-between bg-gradient-to-br from-[#373DA2] via-[#4a3f8f] to-[#bd003c]">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-40"
+          style={{
+            backgroundImage:
+              'radial-gradient(circle at 20% 20%, rgba(255,255,255,0.25), transparent 45%), radial-gradient(circle at 80% 70%, rgba(255,200,180,0.2), transparent 40%)',
+          }}
+        />
+        <div
+          className="pointer-events-none absolute -right-16 -bottom-20 w-72 h-72 rounded-full border border-white/15"
+          aria-hidden
+        />
+        <div
+          className="pointer-events-none absolute -right-4 -bottom-4 w-48 h-48 rounded-full border border-white/10"
+          aria-hidden
+        />
 
-      <div className="relative w-full max-w-md">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-4">
-            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.8)]" />
-            <span className="text-xs font-bold text-emerald-400 uppercase tracking-[0.2em]">Sistema Activo</span>
-          </div>
-
-          <h1 className="text-4xl font-black tracking-widest text-white uppercase mb-1">
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-rose-400 via-rose-300 to-amber-300">
-              Consentia
-            </span>
-          </h1>
-          <p className="text-sm text-slate-400 font-medium tracking-wide">
-            Gestión de Consentimientos Médicos
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: 'easeOut' }}
+          className="relative z-10"
+        >
+          <p className="text-[11px] font-semibold tracking-[0.28em] uppercase text-white/65 mb-3">
+            Consentia
           </p>
-        </div>
+          <h1 className="font-[Cormorant_Garamond,Georgia,serif] text-[2.65rem] sm:text-5xl lg:text-6xl font-semibold text-white leading-[1.05] tracking-tight">
+            Dra. Gloria Cabezas
+          </h1>
+          <p className="mt-3 text-sm sm:text-base text-white/85 font-medium max-w-sm leading-snug">
+            Gestión de consentimientos informados de su consulta.
+          </p>
+        </motion.div>
 
-        {/* Card */}
-        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="p-2.5 bg-rose-500/20 rounded-xl text-rose-400">
-              <Lock className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="font-bold text-white text-base">Acceso Seguro</h2>
-              <p className="text-xs text-slate-400">Introduce tus credenciales de clínica</p>
-            </div>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.25, duration: 0.5 }}
+          className="relative z-10 mt-8 lg:mt-0 space-y-2"
+        >
+          <p className="text-sm font-semibold text-white/90">Medicina estética</p>
+          <p className="text-[11px] text-white/55 font-medium hidden lg:block">
+            Acceso restringido · Cifrado RGPD
+          </p>
+        </motion.div>
+      </aside>
+
+      {/* Form panel */}
+      <main className="flex-1 flex items-center justify-center px-5 py-8 sm:px-8 lg:px-16 lg:py-12">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.1, ease: 'easeOut' }}
+          className="w-full max-w-md"
+        >
+          <div className="mb-7 lg:mb-8">
+            <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
+              Iniciar sesión
+            </h2>
+            <p className="mt-1.5 text-sm text-slate-500 font-medium leading-relaxed">
+              Introduce el email y la contraseña de la clínica para entrar al panel de Consentia.
+            </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Email */}
+          <form
+            onSubmit={handleSubmit}
+            className="bg-white rounded-[1.75rem] border border-slate-200/90 shadow-[0_20px_50px_-28px_rgba(55,61,162,0.35)] p-6 sm:p-8 space-y-5"
+          >
             <div>
-              <label className="text-xs font-bold text-slate-300 block mb-1.5">
+              <label htmlFor="login-email" className="text-sm font-semibold text-slate-700 block mb-2">
                 Email
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
+                  id="login-email"
                   type="email"
                   required
                   autoComplete="email"
+                  autoFocus
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="tu@clinica.com"
-                  className="w-full bg-white/5 border border-white/10 text-white placeholder:text-slate-600 rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#bd003c]/60 focus:border-[#bd003c]/40 transition-all"
+                  placeholder="ej. dra.gloria@clinica.com"
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder:text-slate-400 rounded-2xl pl-10 pr-4 py-3.5 text-sm font-medium focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#bd003c]/35 focus:border-[#bd003c]/50 transition-all"
                 />
               </div>
             </div>
 
-            {/* Password */}
             <div>
-              <label className="text-xs font-bold text-slate-300 block mb-1.5">
+              <label htmlFor="login-password" className="text-sm font-semibold text-slate-700 block mb-2">
                 Contraseña
               </label>
               <div className="relative">
-                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   required
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-white/5 border border-white/10 text-white placeholder:text-slate-600 rounded-xl pl-10 pr-10 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#bd003c]/60 focus:border-[#bd003c]/40 transition-all"
+                  placeholder="Tu contraseña"
+                  className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder:text-slate-400 rounded-2xl pl-10 pr-11 py-3.5 text-sm font-medium focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#bd003c]/35 focus:border-[#bd003c]/50 transition-all"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 transition-colors"
+                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
-            {/* Error message */}
             {error && (
-              <div className="p-3 bg-rose-500/20 border border-rose-500/30 rounded-xl text-rose-300 text-xs font-medium">
+              <div
+                role="alert"
+                className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-sm font-medium leading-snug"
+              >
                 {error}
               </div>
             )}
 
-            {/* Submit */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3.5 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-sm shadow-lg flex items-center justify-center gap-2 transition-all mt-2"
+              className="w-full py-4 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-base shadow-lg shadow-[#bd003c]/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
             >
               {loading ? (
                 <>
-                  <Zap className="w-4 h-4 animate-pulse" />
-                  Verificando...
+                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Entrando…
                 </>
               ) : (
                 <>
-                  <ShieldCheck className="w-4 h-4" />
-                  Acceder al Sistema
+                  Entrar al panel
+                  <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </button>
-          </form>
-        </div>
 
-        {/* Footer */}
-        <p className="text-center text-xs text-slate-600 mt-6">
-          Acceso restringido · Cifrado RGPD · Supabase Cloud
-        </p>
-      </div>
+            <p className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400 font-medium pt-1">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+              Conexión segura · Uso exclusivo de la consulta
+            </p>
+          </form>
+
+          <p className="mt-6 text-center text-xs text-slate-400 font-medium lg:hidden">
+            Acceso restringido · Cifrado RGPD
+          </p>
+        </motion.div>
+      </main>
     </div>
   );
 };

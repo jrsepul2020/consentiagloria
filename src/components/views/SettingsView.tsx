@@ -1,21 +1,25 @@
 import React, { useState } from 'react';
-import { Moon, Sun, Bell, Database, ShieldCheck, Check, Smartphone, Lock, RefreshCw, Building2, User } from 'lucide-react';
+import { Moon, Sun, Bell, Database, ShieldCheck, Check, RefreshCw, Building2, LogOut } from 'lucide-react';
 import { ClinicSettings } from '../../types';
 
 interface SettingsViewProps {
   clinicSettings: ClinicSettings;
   darkMode: boolean;
+  userEmail?: string;
   onUpdateClinicSettings: (updates: Partial<ClinicSettings>) => void;
   onToggleDarkMode: () => void;
   onSimulatePush: () => void;
+  onSignOut: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   clinicSettings,
   darkMode,
+  userEmail,
   onUpdateClinicSettings,
   onToggleDarkMode,
   onSimulatePush,
+  onSignOut,
 }) => {
   const [editing, setEditing] = useState(false);
   const [clinicName, setClinicName] = useState(clinicSettings.clinicName);
@@ -228,6 +232,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <p className="leading-relaxed">
           Datos almacenados con cifrado de extremo a extremo y respaldo de alta disponibilidad. Consentimientos firmados en el bucket privado <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">consent-pdfs</code>.
         </p>
+      </div>
+
+      {/* Session / Sign out */}
+      <div className="p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-slate-100 dark:bg-slate-700 rounded-xl text-slate-600 dark:text-slate-300">
+            <LogOut className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <h4 className="font-bold text-sm text-slate-900 dark:text-white">Sesión</h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+              {userEmail || 'Cuenta autenticada'}
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onSignOut}
+          className="w-full py-3 px-3 bg-slate-50 dark:bg-slate-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 dark:text-slate-200 hover:text-[#bd003c] dark:hover:text-rose-400 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-900/50 flex items-center justify-center gap-2 transition-all"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+          Cerrar sesión
+        </button>
       </div>
     </div>
   );

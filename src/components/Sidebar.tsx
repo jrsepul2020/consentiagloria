@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Users, FileCheck, LayoutTemplate, Settings, Moon, Sun, Zap, ShieldCheck } from 'lucide-react';
+import { Home, Users, FileCheck, LayoutTemplate, Settings, Moon, Sun, Zap, ShieldCheck, LogOut } from 'lucide-react';
 
 export type NavTab = 'inicio' | 'clientes' | 'consentimientos' | 'plantillas' | 'ajustes';
 
@@ -10,6 +10,8 @@ interface SidebarProps {
   darkMode: boolean;
   onToggleDarkMode: () => void;
   onSimulatePush: () => void;
+  userEmail?: string;
+  onSignOut: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -19,6 +21,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   darkMode,
   onToggleDarkMode,
   onSimulatePush,
+  userEmail,
+  onSignOut,
 }) => {
   const navItems = [
     { id: 'inicio' as NavTab, label: 'Inicio', icon: Home },
@@ -98,6 +102,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {darkMode ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5" />}
           {darkMode ? 'Modo Claro' : 'Modo Oscuro'}
         </button>
+
+        {/* Sign out */}
+        <button
+          onClick={onSignOut}
+          className="w-full flex items-center gap-2 px-3 py-2.5 bg-slate-50 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-700 dark:text-slate-300 hover:text-[#bd003c] dark:hover:text-rose-400 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-900/50 rounded-xl text-xs font-bold transition-all"
+        >
+          <LogOut className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">Cerrar sesión</span>
+        </button>
+
+        {userEmail && (
+          <p className="px-3 text-[10px] text-slate-400 dark:text-slate-500 truncate" title={userEmail}>
+            {userEmail}
+          </p>
+        )}
 
         {/* Security badge */}
         <div className="flex items-center gap-2 px-3 py-2 text-[10px] text-slate-400 dark:text-slate-500">

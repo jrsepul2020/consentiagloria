@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, getSession } from './lib/supabaseClient';
+import { supabase, getSession, signOut } from './lib/supabaseClient';
 import { supabaseService } from './services/supabaseService';
 import { NavTab, BottomNav } from './components/BottomNav';
 import { Sidebar } from './components/Sidebar';
@@ -136,6 +136,15 @@ export default function App() {
     triggerToast('⚡ Supabase Realtime', 'Nueva firma biométrica procesada.');
   };
 
+  const handleSignOut = async () => {
+    const { error } = await signOut();
+    if (error) {
+      triggerToast('Error al salir', error.message);
+      return;
+    }
+    setSession(null);
+  };
+
   const handleOpenNewConsentForPatient = (patientId: string) => {
     setPreselectedPatientId(patientId);
     setPreselectedTemplateId(undefined);
@@ -210,6 +219,8 @@ export default function App() {
         darkMode={darkMode}
         onToggleDarkMode={toggleDarkMode}
         onSimulatePush={handleSimulatePush}
+        userEmail={session.user.email}
+        onSignOut={handleSignOut}
       />
 
       {/* Main content area */}
@@ -307,9 +318,11 @@ export default function App() {
             <SettingsView
               clinicSettings={clinicSettings}
               darkMode={darkMode}
+              userEmail={session.user.email}
               onUpdateClinicSettings={(updates) => supabaseService.updateClinicSettings(updates)}
               onToggleDarkMode={toggleDarkMode}
               onSimulatePush={handleSimulatePush}
+              onSignOut={handleSignOut}
             />
           )}
         </main>
