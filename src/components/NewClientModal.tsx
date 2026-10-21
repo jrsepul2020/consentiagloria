@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, UserPlus, Phone, Mail, Check } from 'lucide-react';
 
 interface NewClientModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialFullName?: string;
   onAddClient: (patientData: {
     fullName: string;
     dni: string;
@@ -16,6 +17,7 @@ interface NewClientModalProps {
 export const NewClientModal: React.FC<NewClientModalProps> = ({
   isOpen,
   onClose,
+  initialFullName = '',
   onAddClient,
 }) => {
   const [fullName, setFullName] = useState('');
@@ -23,13 +25,21 @@ export const NewClientModal: React.FC<NewClientModalProps> = ({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
 
+  useEffect(() => {
+    if (isOpen) {
+      setFullName(initialFullName.trim());
+      setDni('');
+      setPhone('');
+      setEmail('');
+    }
+  }, [isOpen, initialFullName]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim() || !dni.trim()) return;
 
     onAddClient({ fullName, dni, phone, email });
 
-    // Reset form
     setFullName('');
     setDni('');
     setPhone('');
@@ -46,14 +56,14 @@ export const NewClientModal: React.FC<NewClientModalProps> = ({
             animate={{ opacity: 0.6 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 bg-slate-900/70 z-50 backdrop-blur-xs"
+            className="fixed inset-0 bg-slate-900/70 z-[60] backdrop-blur-xs"
           />
 
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="fixed inset-x-4 top-[10%] max-w-lg mx-auto bg-white dark:bg-slate-900 rounded-3xl z-50 shadow-2xl flex flex-col border border-slate-200 dark:border-slate-800 overflow-hidden"
+            className="fixed inset-x-4 top-[10%] max-w-lg mx-auto bg-white dark:bg-slate-900 rounded-3xl z-[60] shadow-2xl flex flex-col border border-slate-200 dark:border-slate-800 overflow-hidden"
           >
             {/* Header */}
             <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/50">

@@ -9,10 +9,10 @@ import {
   Search,
   Lock,
   Tag,
-  UserCheck,
   ChevronDown,
   Check,
   IdCard,
+  UserPlus,
 } from 'lucide-react';
 import { Patient, ConsentTemplate } from '../types';
 
@@ -23,6 +23,7 @@ interface NewConsentModalProps {
   templates: ConsentTemplate[];
   preselectedPatientId?: string;
   preselectedTemplateId?: string;
+  onRequestNewClient?: (draftName?: string) => void;
   onCreateConsent: (data: {
     patientId: string;
     patientNameSnapshot: string;
@@ -42,6 +43,7 @@ export const NewConsentModal: React.FC<NewConsentModalProps> = ({
   templates,
   preselectedPatientId,
   preselectedTemplateId,
+  onRequestNewClient,
   onCreateConsent,
 }) => {
   // 1. Process active templates: highest version per unique treatment name
@@ -103,33 +105,56 @@ export const NewConsentModal: React.FC<NewConsentModalProps> = ({
     );
   }, [latestActiveTemplates, templateSearch]);
 
-  // Sync state on modal open / props change
+  // Sync state when modal opens
   useEffect(() => {
-    if (isOpen) {
-      // Patient preselection
-      if (preselectedPatientId && patients.some((p) => p.id === preselectedPatientId)) {
-        setSelectedPatientId(preselectedPatientId);
-      } else if (patients.length > 0) {
-        setSelectedPatientId(patients[0].id);
-      } else {
-        setSelectedPatientId(null);
-      }
+    if (!isOpen) return;
 
-      // Template preselection
-      if (preselectedTemplateId && latestActiveTemplates.some((t) => t.id === preselectedTemplateId)) {
-        setSelectedTemplateId(preselectedTemplateId);
-      } else if (latestActiveTemplates.length > 0) {
-        setSelectedTemplateId(latestActiveTemplates[0].id);
-      } else {
-        setSelectedTemplateId(null);
-      }
-
-      setPatientSearch('');
-      setTemplateSearch('');
-      setIsPatientDropdownOpen(false);
-      setIsTemplateDropdownOpen(false);
+    if (preselectedPatientId && patients.some((p) => p.id === preselectedPatientId)) {
+      setSelectedPatientId(preselectedPatientId);
+    } else if (patients.length > 0) {
+      setSelectedPatientId(patients[0].id);
+    } else {
+      setSelectedPatientId(null);
     }
-  }, [isOpen, preselectedPatientId, preselectedTemplateId, patients, latestActiveTemplates]);
+
+    if (preselectedTemplateId && latestActiveTemplates.some((t) => t.id === preselectedTemplateId)) {
+      setSelectedTemplateId(preselectedTemplateId);
+    } else if (latestActiveTemplates.length > 0) {
+      setSelectedTemplateId(latestActiveTemplates[0].id);
+    } else {
+      setSelectedTemplateId(null);
+    }
+
+    setPatientSearch('');
+    setTemplateSearch('');
+    setIsPatientDropdownOpen(false);
+    setIsTemplateDropdownOpen(false);
+    // Solo al abrir el modal; la selección tras crear cliente se sincroniza abajo
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  // Tras crear un cliente desde este flujo, seleccionarlo automáticamente
+  useEffect(() => {
+    if (!isOpen || !preselectedPatientId) return;
+    if (patients.some((p) => p.id === preselectedPatientId)) {
+      setSelectedPatientId(preselectedPatientId);
+      setPatientSearch('');
+      setIsPatientDropdownOpen(false);
+    }
+  }, [isOpen, preselectedPatientId, patients]);
+
+  // Si el id temporal se reemplaza por el persistido de Supabase, mantener la selección
+  useEffect(() => {
+    if (!isOpen || !selectedPatientId) return;
+    if (patients.some((p) => p.id === selectedPatientId)) return;
+    if (preselectedPatientId && patients.some((p) => p.id === preselectedPatientId)) {
+      setSelectedPatientId(preselectedPatientId);
+      return;
+    }
+    if (patients.length > 0) {
+      setSelectedPatientId(patients[0].id);
+    }
+  }, [isOpen, patients, selectedPatientId, preselectedPatientId]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -245,38 +270,60 @@ export const NewConsentModal: React.FC<NewConsentModalProps> = ({
 
                 {/* Patient Dropdown List */}
                 {isPatientDropdownOpen && (
-                  <div className="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 max-h-56 overflow-y-auto p-1.5 divide-y divide-slate-100 dark:divide-slate-700/50">
-                    {filteredPatients.length === 0 ? (
-                      <div className="p-3 text-xs text-slate-400 text-center font-medium">
-                        No se encontraron clientes coincidentes
-                      </div>
-                    ) : (
-                      filteredPatients.map((patient) => {
-                        const isSelected = patient.id === selectedPatientId;
-                        return (
-                          <div
-                            key={patient.id}
-                            onClick={() => {
-                              setSelectedPatientId(patient.id);
-                              setPatientSearch('');
-                              setIsPatientDropdownOpen(false);
-                            }}
-                            className={`p-2.5 rounded-xl cursor-pointer transition-all flex items-center justify-between text-xs ${
-                              isSelected
-                                ? 'bg-rose-50 dark:bg-rose-950/50 text-[#bd003c] dark:text-rose-400 font-bold'
-                                : 'hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-200'
-                            }`}
-                          >
-                            <div>
-                              <span className="font-extrabold block text-sm">{patient.fullName}</span>
-                              <span className="text-[11px] opacity-75 font-medium flex items-center gap-1 mt-0.5">
-                                <IdCard className="w-3 h-3 text-slate-400" /> DNI: {patient.dni}
-                              </span>
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col max-h-64">
+                    <div className="overflow-y-auto p-1.5 divide-y divide-slate-100 dark:divide-slate-700/50 flex-1 min-h-0">
+                      {filteredPatients.length === 0 ? (
+                        <div className="p-3 text-xs text-slate-400 text-center font-medium">
+                          No se encontraron clientes coincidentes
+                        </div>
+                      ) : (
+                        filteredPatients.map((patient) => {
+                          const isSelected = patient.id === selectedPatientId;
+                          return (
+                            <div
+                              key={patient.id}
+                              onClick={() => {
+                                setSelectedPatientId(patient.id);
+                                setPatientSearch('');
+                                setIsPatientDropdownOpen(false);
+                              }}
+                              className={`p-2.5 rounded-xl cursor-pointer transition-all flex items-center justify-between text-xs ${
+                                isSelected
+                                  ? 'bg-rose-50 dark:bg-rose-950/50 text-[#bd003c] dark:text-rose-400 font-bold'
+                                  : 'hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-200'
+                              }`}
+                            >
+                              <div>
+                                <span className="font-extrabold block text-sm">{patient.fullName}</span>
+                                <span className="text-[11px] opacity-75 font-medium flex items-center gap-1 mt-0.5">
+                                  <IdCard className="w-3 h-3 text-slate-400" /> DNI: {patient.dni}
+                                </span>
+                              </div>
+                              {isSelected && <Check className="w-4 h-4 text-[#bd003c] dark:text-rose-400" />}
                             </div>
-                            {isSelected && <Check className="w-4 h-4 text-[#bd003c] dark:text-rose-400" />}
-                          </div>
-                        );
-                      })
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {onRequestNewClient && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const draft = patientSearch.trim();
+                          setIsPatientDropdownOpen(false);
+                          onRequestNewClient(draft || undefined);
+                        }}
+                        className="shrink-0 flex items-center gap-2 w-full px-3.5 py-3 text-left text-sm font-bold text-[#bd003c] dark:text-rose-400 bg-rose-50/80 dark:bg-rose-950/40 border-t border-rose-100 dark:border-rose-900/50 hover:bg-rose-100 dark:hover:bg-rose-950/70 transition-colors"
+                      >
+                        <UserPlus className="w-4 h-4 shrink-0" />
+                        Crear nuevo cliente
+                        {patientSearch.trim() ? (
+                          <span className="font-medium text-slate-500 dark:text-slate-400 truncate">
+                            «{patientSearch.trim()}»
+                          </span>
+                        ) : null}
+                      </button>
                     )}
                   </div>
                 )}

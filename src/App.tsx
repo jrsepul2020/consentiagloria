@@ -58,6 +58,7 @@ export default function App() {
   // Modal states
   const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
   const [isNewClientModalOpen, setIsNewClientModalOpen] = useState(false);
+  const [newClientDraftName, setNewClientDraftName] = useState('');
   const [isNewConsentModalOpen, setIsNewConsentModalOpen] = useState(false);
   const [isNewTemplateModalOpen, setIsNewTemplateModalOpen] = useState(false);
   const [templateToEdit, setTemplateToEdit] = useState<ConsentTemplate | null>(null);
@@ -98,6 +99,10 @@ export default function App() {
   }) => {
     const newPatient = supabaseService.addPatient(patientData);
     triggerToast('✓ Cliente Registrado', `${newPatient.fullName} añadido al expediente.`);
+    // Si se creó desde "Nuevo consentimiento", dejarlo seleccionado en el flujo
+    if (isNewConsentModalOpen) {
+      setPreselectedPatientId(newPatient.id);
+    }
   };
 
   const handleCreateConsent = (consentData: {
@@ -240,7 +245,10 @@ export default function App() {
               signedCount={signedCount}
               activities={activities}
               recentConsents={consents.slice(0, 8)}
-              onNewClient={() => setIsNewClientModalOpen(true)}
+              onNewClient={() => {
+                setNewClientDraftName('');
+                setIsNewClientModalOpen(true);
+              }}
               onNewConsent={() => {
                 setPreselectedPatientId(undefined);
                 setPreselectedTemplateId(undefined);
@@ -257,7 +265,10 @@ export default function App() {
           {activeTab === 'clientes' && (
             <ClientsView
               patients={patients}
-              onNewClient={() => setIsNewClientModalOpen(true)}
+              onNewClient={() => {
+                setNewClientDraftName('');
+                setIsNewClientModalOpen(true);
+              }}
               onNewConsentForPatient={handleOpenNewConsentForPatient}
             />
           )}
@@ -328,12 +339,6 @@ export default function App() {
         onSignComplete={handleSignComplete}
       />
 
-      <NewClientModal
-        isOpen={isNewClientModalOpen}
-        onClose={() => setIsNewClientModalOpen(false)}
-        onAddClient={handleAddClient}
-      />
-
       <NewConsentModal
         isOpen={isNewConsentModalOpen}
         onClose={() => setIsNewConsentModalOpen(false)}
@@ -341,7 +346,21 @@ export default function App() {
         templates={templates}
         preselectedPatientId={preselectedPatientId}
         preselectedTemplateId={preselectedTemplateId}
+        onRequestNewClient={(draftName) => {
+          setNewClientDraftName(draftName || '');
+          setIsNewClientModalOpen(true);
+        }}
         onCreateConsent={handleCreateConsent}
+      />
+
+      <NewClientModal
+        isOpen={isNewClientModalOpen}
+        onClose={() => {
+          setIsNewClientModalOpen(false);
+          setNewClientDraftName('');
+        }}
+        initialFullName={newClientDraftName}
+        onAddClient={handleAddClient}
       />
 
       <NewTemplateModal
