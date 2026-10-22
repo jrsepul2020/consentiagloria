@@ -39,8 +39,8 @@ export const NewClientView: React.FC<NewClientViewProps> = ({
     'w-full text-base p-4 rounded-2xl border border-slate-200/90 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white shadow-sm focus:ring-2 focus:ring-[#bd003c] outline-hidden font-medium';
 
   return (
-    <div className="max-w-xl mx-auto pb-28 lg:pb-8 -mx-1">
-      <div className="rounded-3xl bg-slate-100/90 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-5 sm:p-7">
+    <div className="max-w-2xl mx-auto pb-28 lg:pb-8 -mx-3 sm:-mx-2 lg:mx-auto">
+      <div className="rounded-2xl sm:rounded-3xl bg-slate-100/90 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-3 sm:p-5 lg:p-6">
       <div className="mb-6">
         <div className="flex items-center gap-3 mb-1">
           <div className="p-2.5 bg-rose-100 dark:bg-rose-950 rounded-2xl text-[#bd003c] dark:text-rose-400">

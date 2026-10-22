@@ -14,6 +14,14 @@ import {
   initialClinicSettings,
 } from '../data/initialData';
 import { generateAndUploadConsentPdf } from '../utils/pdfGenerator';
+import { uploadConsentSignature } from '../lib/consentStorage';
+
+export const PAGE_SIZE_PATIENTS = 40;
+export const PAGE_SIZE_CONSENTS = 30;
+
+/** Columnas de consentimiento sin signature_data (evita traer base64 pesado). */
+const CONSENT_LIST_COLUMNS =
+  'id, patient_id, template_id, patient_name_snapshot, patient_dni_snapshot, title, category, template_version, content_snapshot, status, signature_path, signed_at, pdf_path, created_at, updated_at';
 
 // ── Mapping helpers: DB snake_case → App camelCase ────────────────────────────
 
@@ -41,6 +49,8 @@ function mapConsent(row: Record<string, unknown>): Consent {
     templateVersion: row.template_version as number,
     contentSnapshot: row.content_snapshot as string,
     status: row.status as Consent['status'],
+    signaturePath: (row.signature_path as string) || undefined,
+    // Legacy: solo si aún existe en filas antiguas (no se solicita en listados)
     signatureData: (row.signature_data as string) || undefined,
     signedAt: (row.signed_at as string) || undefined,
     pdfPath: (row.pdf_path as string) || undefined,
@@ -101,6 +111,16 @@ class SupabaseService {
   private listeners: Set<Listener> = new Set();
   private realtimeChannel: ReturnType<typeof supabase.channel> | null = null;
 
+  private patientsOffset = 0;
+  private consentsOffset = 0;
+  private patientsHasMore = true;
+  private consentsHasMore = true;
+  private patientsQuery = '';
+  private consentsQuery = '';
+  private pendingCountCache = 0;
+  private signedCountCache = 0;
+  private totalConsentsCache = 0;
+
   constructor() {
     this.init();
   }
@@ -116,10 +136,11 @@ class SupabaseService {
   private async fetchAll() {
     await Promise.all([
       this.fetchClinicSettings(),
-      this.fetchPatients(),
-      this.fetchConsents(),
+      this.fetchPatientsPage(true),
+      this.fetchConsentsPage(true),
       this.fetchTemplates(),
       this.fetchActivities(),
+      this.refreshConsentCounts(),
     ]);
   }
 
@@ -134,24 +155,85 @@ class SupabaseService {
     }
   }
 
-  private async fetchPatients() {
-    const { data, error } = await supabase
+  private async fetchPatientsPage(reset: boolean) {
+    if (reset) {
+      this.patientsOffset = 0;
+      this.patientsHasMore = true;
+    }
+    if (!this.patientsHasMore && !reset) return;
+
+    let query = supabase
       .from('patients')
       .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && data && data.length > 0) {
-      this.patients = (data as Record<string, unknown>[]).map(mapPatient);
+      .order('full_name', { ascending: true })
+      .range(this.patientsOffset, this.patientsOffset + PAGE_SIZE_PATIENTS - 1);
+
+    const term = this.patientsQuery.trim();
+    if (term) {
+      query = query.or(
+        `full_name.ilike.%${term}%,dni.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%`
+      );
     }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error('Error fetching patients:', error);
+      return;
+    }
+
+    const mapped = ((data || []) as Record<string, unknown>[]).map(mapPatient);
+    this.patients = reset ? mapped : [...this.patients, ...mapped];
+    this.patientsOffset += mapped.length;
+    this.patientsHasMore = mapped.length === PAGE_SIZE_PATIENTS;
   }
 
-  private async fetchConsents() {
-    const { data, error } = await supabase
-      .from('consents')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && data && data.length > 0) {
-      this.consents = (data as Record<string, unknown>[]).map(mapConsent);
+  private async fetchConsentsPage(reset: boolean) {
+    if (reset) {
+      this.consentsOffset = 0;
+      this.consentsHasMore = true;
     }
+    if (!this.consentsHasMore && !reset) return;
+
+    let query = supabase
+      .from('consents')
+      .select(CONSENT_LIST_COLUMNS)
+      .order('created_at', { ascending: false })
+      .range(this.consentsOffset, this.consentsOffset + PAGE_SIZE_CONSENTS - 1);
+
+    const term = this.consentsQuery.trim();
+    if (term) {
+      query = query.or(
+        `title.ilike.%${term}%,patient_name_snapshot.ilike.%${term}%,category.ilike.%${term}%`
+      );
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error('Error fetching consents:', error);
+      return;
+    }
+
+    const mapped = ((data || []) as Record<string, unknown>[]).map(mapConsent);
+    this.consents = reset ? mapped : [...this.consents, ...mapped];
+    this.consentsOffset += mapped.length;
+    this.consentsHasMore = mapped.length === PAGE_SIZE_CONSENTS;
+  }
+
+  private async refreshConsentCounts() {
+    const [pending, signed, total] = await Promise.all([
+      supabase
+        .from('consents')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'PENDIENTE'),
+      supabase
+        .from('consents')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'FIRMADO'),
+      supabase.from('consents').select('id', { count: 'exact', head: true }),
+    ]);
+    this.pendingCountCache = pending.count ?? 0;
+    this.signedCountCache = signed.count ?? 0;
+    this.totalConsentsCache = total.count ?? 0;
   }
 
   private async fetchTemplates() {
@@ -181,11 +263,11 @@ class SupabaseService {
     this.realtimeChannel = supabase
       .channel('consentia-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'patients' }, async () => {
-        await this.fetchPatients();
+        await this.fetchPatientsPage(true);
         this.notify();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'consents' }, async () => {
-        await this.fetchConsents();
+        await Promise.all([this.fetchConsentsPage(true), this.refreshConsentCounts()]);
         this.notify();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, async () => {
@@ -243,6 +325,21 @@ class SupabaseService {
 
   public getPatients(): Patient[] {
     return [...this.patients];
+  }
+
+  public hasMorePatients(): boolean {
+    return this.patientsHasMore;
+  }
+
+  public async searchPatients(term: string) {
+    this.patientsQuery = term;
+    await this.fetchPatientsPage(true);
+    this.notify();
+  }
+
+  public async loadMorePatients() {
+    await this.fetchPatientsPage(false);
+    this.notify();
   }
 
   public getPatientById(id: string): Patient | undefined {
@@ -307,12 +404,31 @@ class SupabaseService {
     return [...this.consents];
   }
 
+  public hasMoreConsents(): boolean {
+    return this.consentsHasMore;
+  }
+
+  public getTotalConsentsCount(): number {
+    return this.totalConsentsCache || this.consents.length;
+  }
+
+  public async searchConsents(term: string) {
+    this.consentsQuery = term;
+    await this.fetchConsentsPage(true);
+    this.notify();
+  }
+
+  public async loadMoreConsents() {
+    await this.fetchConsentsPage(false);
+    this.notify();
+  }
+
   public getPendingCount(): number {
-    return this.consents.filter((c) => c.status === 'PENDIENTE').length;
+    return this.pendingCountCache || this.consents.filter((c) => c.status === 'PENDIENTE').length;
   }
 
   public getSignedCount(): number {
-    return this.consents.filter((c) => c.status === 'FIRMADO').length;
+    return this.signedCountCache || this.consents.filter((c) => c.status === 'FIRMADO').length;
   }
 
   public createConsent(data: {
@@ -380,49 +496,61 @@ class SupabaseService {
     const consent = this.consents.find((c) => c.id === id);
     if (!consent) return undefined;
 
+    const signedAt = new Date().toISOString();
+    // Firma en memoria solo para generar el PDF de esta sesión; no se persiste en BD
     const updated: Consent = {
       ...consent,
       status: 'FIRMADO',
-      signedAt: new Date().toISOString(),
+      signedAt,
       signatureData,
-      updatedAt: new Date().toISOString(),
+      updatedAt: signedAt,
     };
     this.consents = this.consents.map((c) => (c.id === id ? updated : c));
     this.notify();
 
-    // 1. Update status and signature in Supabase 'consents' table
-    supabase
-      .from('consents')
-      .update({
+    void (async () => {
+      const signaturePath = await uploadConsentSignature(id, signatureData);
+
+      const dbUpdate: Record<string, unknown> = {
         status: 'FIRMADO',
-        signed_at: updated.signedAt,
-        signature_data: signatureData,
-      })
-      .eq('id', id)
-      .then(({ error }) => {
-        if (error) console.error('Error signing consent:', error);
-      });
+        signed_at: signedAt,
+        signature_data: null, // no guardar base64 en la tabla
+      };
+      if (signaturePath) dbUpdate.signature_path = signaturePath;
 
-    // 2. Async PDF generation & upload to 'consent-pdfs' Storage bucket
-    generateAndUploadConsentPdf(updated, this.clinicSettings).then((res) => {
-      if (res && res.pdfPath) {
-        const withPdf = { ...updated, pdfPath: res.pdfPath };
-        this.consents = this.consents.map((c) => (c.id === id ? withPdf : c));
-        this.notify();
+      const { error } = await supabase.from('consents').update(dbUpdate).eq('id', id);
+      if (error) console.error('Error signing consent:', error);
 
-        supabase
+      const forPdf: Consent = {
+        ...updated,
+        signaturePath: signaturePath || undefined,
+        signatureData, // data URL local para embeber en PDF ahora
+      };
+
+      const res = await generateAndUploadConsentPdf(forPdf, this.clinicSettings);
+      const cleared: Consent = {
+        ...forPdf,
+        signatureData: undefined, // liberar base64 de memoria
+        pdfPath: res?.pdfPath || forPdf.pdfPath,
+      };
+      this.consents = this.consents.map((c) => (c.id === id ? cleared : c));
+      this.notify();
+
+      if (res?.pdfPath) {
+        const { error: pdfErr } = await supabase
           .from('consents')
           .update({
             pdf_path: res.pdfPath,
             pdf_size: res.pdfSize,
             pdf_created_at: new Date().toISOString(),
           })
-          .eq('id', id)
-          .then(({ error }) => {
-            if (error) console.warn('Warning updating pdf_path:', error.message);
-          });
+          .eq('id', id);
+        if (pdfErr) console.warn('Warning updating pdf_path:', pdfErr.message);
       }
-    });
+
+      await this.refreshConsentCounts();
+      this.notify();
+    })();
 
     this.addActivityLogInternal({
       action: `Consentimiento firmado: ${updated.title} — ${updated.patientNameSnapshot}`,

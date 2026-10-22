@@ -1,0 +1,33 @@
+{
+  "name": "Consentia · Dra. Gloria Cabezas",
+  "short_name": "Consentia",
+  "description": "Gestión de consentimientos informados para la consulta de la Dra. Gloria Cabezas",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#373DA2",
+  "theme_color": "#373DA2",
+  "lang": "es-ES",
+  "categories": ["medical", "business"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

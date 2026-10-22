@@ -1,6 +1,12 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { FileText, Send, Search, ChevronDown, Check, UserPlus } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Search, Check, UserPlus, ChevronRight } from 'lucide-react';
 import { Patient, ConsentTemplate } from '../../types';
+import { AvatarInitials } from '../AvatarInitials';
+import {
+  compareBySurnameThenName,
+  displayNameBySurname,
+} from '../../utils/nameFormat';
+import { supabaseService } from '../../services/supabaseService';
 
 interface NewConsentViewProps {
   patients: Patient[];
@@ -21,27 +27,7 @@ interface NewConsentViewProps {
   }) => void;
 }
 
-/** Nombre = primera palabra; apellidos = resto (orden: apellidos, nombre). */
-function splitFullName(fullName: string) {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { firstName: '', lastName: '' };
-  if (parts.length === 1) return { firstName: parts[0], lastName: parts[0] };
-  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
-}
-
-function displayNameBySurname(fullName: string) {
-  const { firstName, lastName } = splitFullName(fullName);
-  if (!lastName || lastName === firstName) return firstName;
-  return `${lastName}, ${firstName}`;
-}
-
-function compareBySurnameThenName(a: string, b: string) {
-  const pa = splitFullName(a);
-  const pb = splitFullName(b);
-  const byLast = pa.lastName.localeCompare(pb.lastName, 'es', { sensitivity: 'base' });
-  if (byLast !== 0) return byLast;
-  return pa.firstName.localeCompare(pb.firstName, 'es', { sensitivity: 'base' });
-}
+type Step = 1 | 2 | 3;
 
 export const NewConsentView: React.FC<NewConsentViewProps> = ({
   patients,
@@ -52,347 +38,371 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
   onRequestNewClient,
   onCreateConsent,
 }) => {
-  const latestActiveTemplates = useMemo(() => {
-    const active = templates.filter((t) => t.active);
-    const mapByName = new Map<string, ConsentTemplate>();
-
-    active.forEach((tmpl) => {
-      const key = tmpl.name.trim().toLowerCase();
-      const existing = mapByName.get(key);
-      if (!existing || tmpl.version > existing.version) {
-        mapByName.set(key, tmpl);
-      }
-    });
-
-    return Array.from(mapByName.values()).sort((a, b) =>
-      a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
-    );
-  }, [templates]);
+  const [step, setStep] = useState<Step>(1);
+  const [patientSearch, setPatientSearch] = useState('');
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('Todos');
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [documentTitle, setDocumentTitle] = useState('');
 
   const sortedPatients = useMemo(
     () => [...patients].sort((a, b) => compareBySurnameThenName(a.fullName, b.fullName)),
     [patients]
   );
 
-  const [patientSearch, setPatientSearch] = useState('');
-  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
-  const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
-  const patientRef = useRef<HTMLDivElement>(null);
+  const latestActiveTemplates = useMemo(() => {
+    const active = templates.filter((t) => t.active);
+    const mapByName = new Map<string, ConsentTemplate>();
+    active.forEach((tmpl) => {
+      const key = tmpl.name.trim().toLowerCase();
+      const existing = mapByName.get(key);
+      if (!existing || tmpl.version > existing.version) mapByName.set(key, tmpl);
+    });
+    return Array.from(mapByName.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
+    );
+  }, [templates]);
 
-  const selectedPatient = useMemo(
-    () => sortedPatients.find((p) => p.id === selectedPatientId) || null,
-    [sortedPatients, selectedPatientId]
-  );
+  const categories = useMemo(() => {
+    const set = new Set(latestActiveTemplates.map((t) => t.category).filter(Boolean));
+    return ['Todos', ...Array.from(set).sort((a, b) => a.localeCompare(b, 'es'))];
+  }, [latestActiveTemplates]);
+
+  const selectedPatient = sortedPatients.find((p) => p.id === selectedPatientId) || null;
+  const selectedTemplate =
+    latestActiveTemplates.find((t) => t.id === selectedTemplateId) || null;
 
   const filteredPatients = useMemo(() => {
-    if (!patientSearch.trim()) return sortedPatients.slice(0, 80);
+    if (!patientSearch.trim()) return sortedPatients;
     const term = patientSearch.toLowerCase().trim();
-    return sortedPatients
-      .filter(
-        (p) =>
-          p.fullName.toLowerCase().includes(term) ||
-          displayNameBySurname(p.fullName).toLowerCase().includes(term) ||
-          p.dni.toLowerCase().includes(term)
-      )
-      .slice(0, 80);
+    return sortedPatients.filter(
+      (p) =>
+        p.fullName.toLowerCase().includes(term) ||
+        displayNameBySurname(p.fullName).toLowerCase().includes(term) ||
+        p.dni.toLowerCase().includes(term)
+    );
   }, [sortedPatients, patientSearch]);
 
-  const [templateSearch, setTemplateSearch] = useState('');
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
-  const [isTemplateDropdownOpen, setIsTemplateDropdownOpen] = useState(false);
-  const templateRef = useRef<HTMLDivElement>(null);
-
-  const selectedTemplate = useMemo(() => {
-    return (
-      latestActiveTemplates.find((t) => t.id === selectedTemplateId) ||
-      (latestActiveTemplates.length > 0 ? latestActiveTemplates[0] : null)
-    );
-  }, [latestActiveTemplates, selectedTemplateId]);
+  const recentPatients = useMemo(() => sortedPatients.slice(0, 8), [sortedPatients]);
 
   const filteredTemplates = useMemo(() => {
-    if (!templateSearch.trim()) return latestActiveTemplates;
-    const term = templateSearch.toLowerCase().trim();
-    return latestActiveTemplates.filter(
-      (t) => t.name.toLowerCase().includes(term) || t.category.toLowerCase().includes(term)
-    );
-  }, [latestActiveTemplates, templateSearch]);
+    return latestActiveTemplates.filter((t) => {
+      const matchesCat = categoryFilter === 'Todos' || t.category === categoryFilter;
+      if (!templateSearch.trim()) return matchesCat;
+      const term = templateSearch.toLowerCase().trim();
+      return (
+        matchesCat &&
+        (t.name.toLowerCase().includes(term) || t.category.toLowerCase().includes(term))
+      );
+    });
+  }, [latestActiveTemplates, categoryFilter, templateSearch]);
 
   useEffect(() => {
     if (preselectedPatientId && sortedPatients.some((p) => p.id === preselectedPatientId)) {
       setSelectedPatientId(preselectedPatientId);
-    } else if (sortedPatients.length > 0) {
-      setSelectedPatientId(sortedPatients[0].id);
-    } else {
-      setSelectedPatientId(null);
     }
-
     if (preselectedTemplateId && latestActiveTemplates.some((t) => t.id === preselectedTemplateId)) {
       setSelectedTemplateId(preselectedTemplateId);
-    } else if (latestActiveTemplates.length > 0) {
-      setSelectedTemplateId(latestActiveTemplates[0].id);
-    } else {
-      setSelectedTemplateId(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [preselectedPatientId, preselectedTemplateId, sortedPatients, latestActiveTemplates]);
 
   useEffect(() => {
-    if (!preselectedPatientId) return;
-    if (sortedPatients.some((p) => p.id === preselectedPatientId)) {
-      setSelectedPatientId(preselectedPatientId);
-      setPatientSearch('');
-      setIsPatientDropdownOpen(false);
-    }
-  }, [preselectedPatientId, sortedPatients]);
+    if (step !== 1) return;
+    const t = setTimeout(() => {
+      void supabaseService.searchPatients(patientSearch);
+    }, 280);
+    return () => clearTimeout(t);
+  }, [patientSearch, step]);
 
   useEffect(() => {
-    if (!selectedPatientId) return;
-    if (sortedPatients.some((p) => p.id === selectedPatientId)) return;
-    if (preselectedPatientId && sortedPatients.some((p) => p.id === preselectedPatientId)) {
-      setSelectedPatientId(preselectedPatientId);
-      return;
+    if (selectedTemplate && !documentTitle) {
+      setDocumentTitle(selectedTemplate.name);
     }
-    if (sortedPatients.length > 0) setSelectedPatientId(sortedPatients[0].id);
-  }, [sortedPatients, selectedPatientId, preselectedPatientId]);
+  }, [selectedTemplate, documentTitle]);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (patientRef.current && !patientRef.current.contains(e.target as Node)) {
-        setIsPatientDropdownOpen(false);
-      }
-      if (templateRef.current && !templateRef.current.contains(e.target as Node)) {
-        setIsTemplateDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const canNext =
+    (step === 1 && !!selectedPatient) ||
+    (step === 2 && !!selectedTemplate) ||
+    step === 3;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedPatient || !selectedTemplate) return;
-
-    onCreateConsent({
-      patientId: selectedPatient.id,
-      patientNameSnapshot: selectedPatient.fullName,
-      patientDniSnapshot: selectedPatient.dni,
-      templateId: selectedTemplate.id,
-      title: selectedTemplate.name,
-      category: selectedTemplate.category,
-      templateVersion: selectedTemplate.version,
-      contentSnapshot: selectedTemplate.content,
-    });
+  const goNext = () => {
+    if (step === 1 && selectedPatient) setStep(2);
+    else if (step === 2 && selectedTemplate) {
+      setDocumentTitle(selectedTemplate.name);
+      setStep(3);
+    } else if (step === 3 && selectedPatient && selectedTemplate) {
+      onCreateConsent({
+        patientId: selectedPatient.id,
+        patientNameSnapshot: selectedPatient.fullName,
+        patientDniSnapshot: selectedPatient.dni,
+        templateId: selectedTemplate.id,
+        title: documentTitle.trim() || selectedTemplate.name,
+        category: selectedTemplate.category,
+        templateVersion: selectedTemplate.version,
+        contentSnapshot: selectedTemplate.content,
+      });
+    }
   };
 
-  const fieldClass =
-    'w-full pl-11 pr-11 py-4 border border-slate-200 rounded-2xl text-base font-medium bg-white text-slate-900 shadow-sm focus:ring-2 focus:ring-[#bd003c] outline-hidden dark:bg-slate-950 dark:border-slate-700 dark:text-white';
+  const steps = [
+    { n: 1 as Step, label: 'Cliente' },
+    { n: 2 as Step, label: 'Tratamiento' },
+    { n: 3 as Step, label: 'Revisar' },
+  ];
 
   return (
-    <div className="max-w-xl mx-auto pb-28 lg:pb-8 -mx-1">
-      <div className="rounded-3xl bg-slate-100/90 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-5 sm:p-7">
-        <div className="mb-5 flex items-center gap-3">
-          <div className="p-2.5 bg-rose-100 dark:bg-rose-950 rounded-2xl text-[#bd003c] dark:text-rose-400">
-            <FileText className="w-6 h-6" />
-          </div>
-          <h2 className="text-2xl font-extrabold text-slate-900 dark:text-white">Nuevo consentimiento</h2>
+    <div className="max-w-2xl mx-auto pb-36 lg:pb-10 -mx-3 sm:-mx-2 lg:mx-auto">
+      <div className="rounded-2xl sm:rounded-3xl bg-slate-100/90 dark:bg-slate-900/80 border border-slate-200/70 dark:border-slate-800 p-3 sm:p-5">
+        <h2 className="text-xl font-extrabold text-slate-900 dark:text-white mb-4">
+          Nuevo consentimiento
+        </h2>
+
+        {/* Stepper */}
+        <div className="flex items-center gap-1 mb-5">
+          {steps.map((s, i) => (
+            <React.Fragment key={s.n}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (s.n < step) setStep(s.n);
+                }}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-bold ${
+                  step === s.n
+                    ? 'bg-[#bd003c] text-white'
+                    : step > s.n
+                      ? 'bg-[#373DA2] text-white'
+                      : 'bg-white dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-[10px]">
+                  {step > s.n ? <Check className="w-3 h-3" /> : s.n}
+                </span>
+                {s.label}
+              </button>
+              {i < steps.length - 1 && (
+                <div className={`flex-1 h-0.5 ${step > s.n ? 'bg-[#373DA2]' : 'bg-slate-200 dark:bg-slate-700'}`} />
+              )}
+            </React.Fragment>
+          ))}
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          {/* Cliente — panel blanco */}
-          <div
-            className="relative space-y-3 rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 shadow-sm"
-            ref={patientRef}
-          >
+        {/* Paso 1: Cliente */}
+        {step === 1 && (
+          <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 space-y-4">
             <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-              Cliente *
+              Cliente
             </label>
-
             <div className="relative">
-              <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
                 value={patientSearch}
-                onFocus={() => setIsPatientDropdownOpen(true)}
-                onChange={(e) => {
-                  setPatientSearch(e.target.value);
-                  setIsPatientDropdownOpen(true);
-                }}
-                placeholder={
-                  selectedPatient
-                    ? displayNameBySurname(selectedPatient.fullName)
-                    : 'Buscar cliente...'
-                }
-                className={fieldClass}
+                onChange={(e) => setPatientSearch(e.target.value)}
+                placeholder="Buscar cliente..."
+                className="w-full pl-10 pr-4 py-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
               />
-              <button
-                type="button"
-                onClick={() => setIsPatientDropdownOpen(!isPatientDropdownOpen)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 p-1"
-              >
-                <ChevronDown className={`w-5 h-5 ${isPatientDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
             </div>
 
-            {isPatientDropdownOpen && (
-              <div className="absolute left-4 right-4 top-full mt-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-xl z-40 overflow-hidden flex flex-col max-h-64">
-                <div className="overflow-y-auto p-1.5 flex-1 min-h-0">
-                  {filteredPatients.length === 0 ? (
-                    <div className="p-4 text-sm text-slate-400 text-center font-medium">
-                      Sin resultados
-                    </div>
-                  ) : (
-                    filteredPatients.map((patient) => {
-                      const isSelected = patient.id === selectedPatientId;
-                      return (
-                        <button
-                          type="button"
-                          key={patient.id}
-                          onClick={() => {
-                            setSelectedPatientId(patient.id);
-                            setPatientSearch('');
-                            setIsPatientDropdownOpen(false);
-                          }}
-                          className={`w-full p-3.5 rounded-xl text-left flex items-center justify-between ${
-                            isSelected
-                              ? 'bg-rose-50 dark:bg-rose-950/50 text-[#bd003c] dark:text-rose-400 font-bold'
-                              : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
-                          }`}
-                        >
-                          <span className="font-semibold text-base">
-                            {displayNameBySurname(patient.fullName)}
-                          </span>
-                          {isSelected && <Check className="w-5 h-5 shrink-0" />}
-                        </button>
-                      );
-                    })
-                  )}
+            {!patientSearch.trim() && recentPatients.length > 0 && (
+              <div>
+                <p className="text-xs font-bold text-slate-500 mb-2">Recientes</p>
+                <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
+                  {recentPatients.map((p) => (
+                    <button
+                      type="button"
+                      key={p.id}
+                      onClick={() => setSelectedPatientId(p.id)}
+                      className={`flex flex-col items-center gap-1.5 min-w-[4.5rem] ${
+                        selectedPatientId === p.id ? 'opacity-100' : 'opacity-80'
+                      }`}
+                    >
+                      <AvatarInitials
+                        name={p.fullName}
+                        size="lg"
+                        className={
+                          selectedPatientId === p.id ? 'ring-2 ring-[#bd003c] ring-offset-2' : ''
+                        }
+                      />
+                      <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 text-center leading-tight line-clamp-2 w-16">
+                        {displayNameBySurname(p.fullName)}
+                      </span>
+                    </button>
+                  ))}
                 </div>
-
-                {onRequestNewClient && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const draft = patientSearch.trim();
-                      setIsPatientDropdownOpen(false);
-                      onRequestNewClient(draft || undefined);
-                    }}
-                    className="shrink-0 flex items-center gap-2 w-full px-4 py-4 text-left text-base font-bold text-[#bd003c] dark:text-rose-400 bg-white dark:bg-slate-950 border-t border-slate-100 dark:border-slate-800"
-                  >
-                    <UserPlus className="w-5 h-5 shrink-0" />
-                    Crear nuevo cliente
-                  </button>
-                )}
               </div>
             )}
+
+            <div className="max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 -mx-1">
+              {filteredPatients.map((p) => {
+                const selected = selectedPatientId === p.id;
+                return (
+                  <button
+                    type="button"
+                    key={p.id}
+                    onClick={() => setSelectedPatientId(p.id)}
+                    className={`w-full flex items-center gap-3 px-2 py-3 text-left ${
+                      selected ? 'bg-rose-50 dark:bg-rose-950/40' : ''
+                    }`}
+                  >
+                    <AvatarInitials name={p.fullName} size="md" />
+                    <span
+                      className={`flex-1 font-semibold text-sm ${
+                        selected ? 'text-[#bd003c]' : 'text-slate-800 dark:text-slate-200'
+                      }`}
+                    >
+                      {displayNameBySurname(p.fullName)}
+                    </span>
+                    {selected && <Check className="w-5 h-5 text-[#bd003c]" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            {onRequestNewClient && (
+              <button
+                type="button"
+                onClick={() => onRequestNewClient(patientSearch.trim() || undefined)}
+                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border-2 border-dashed border-[#bd003c]/40 text-[#bd003c] font-bold text-sm"
+              >
+                <UserPlus className="w-4 h-4" />
+                Crear nuevo cliente
+              </button>
+            )}
           </div>
+        )}
 
-          {/* Tratamiento — panel blanco */}
-          <div
-            className="relative space-y-3 rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 shadow-sm"
-            ref={templateRef}
-          >
+        {/* Paso 2: Tratamiento */}
+        {step === 2 && (
+          <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 space-y-4">
             <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-              Tratamiento *
+              Tratamiento
             </label>
-
             <div className="relative">
-              <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
                 value={templateSearch}
-                onFocus={() => setIsTemplateDropdownOpen(true)}
-                onChange={(e) => {
-                  setTemplateSearch(e.target.value);
-                  setIsTemplateDropdownOpen(true);
-                }}
-                placeholder={selectedTemplate ? selectedTemplate.name : 'Buscar tratamiento...'}
-                className={fieldClass}
+                onChange={(e) => setTemplateSearch(e.target.value)}
+                placeholder="Buscar tratamiento..."
+                className="w-full pl-10 pr-4 py-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
               />
-              <button
-                type="button"
-                onClick={() => setIsTemplateDropdownOpen(!isTemplateDropdownOpen)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 p-1"
-              >
-                <ChevronDown className={`w-5 h-5 ${isTemplateDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
             </div>
 
-            {isTemplateDropdownOpen && (
-              <div className="absolute left-4 right-4 top-full mt-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-xl z-40 max-h-56 overflow-y-auto p-1.5">
-                {filteredTemplates.length === 0 ? (
-                  <div className="p-4 text-sm text-slate-400 text-center font-medium">
-                    Sin resultados
-                  </div>
-                ) : (
-                  filteredTemplates.map((tmpl) => {
-                    const isSelected = tmpl.id === selectedTemplateId;
-                    return (
-                      <button
-                        type="button"
-                        key={tmpl.id}
-                        onClick={() => {
-                          setSelectedTemplateId(tmpl.id);
-                          setTemplateSearch('');
-                          setIsTemplateDropdownOpen(false);
-                        }}
-                        className={`w-full p-3.5 rounded-xl text-left flex items-center justify-between ${
-                          isSelected
-                            ? 'bg-rose-50 dark:bg-rose-950/50 text-[#bd003c] dark:text-rose-400 font-bold'
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200'
-                        }`}
-                      >
-                        <span className="font-semibold text-base truncate">{tmpl.name}</span>
-                        {isSelected && <Check className="w-5 h-5 shrink-0" />}
-                      </button>
-                    );
-                  })
-                )}
+            <div className="flex gap-2 overflow-x-auto scrollbar-none pb-0.5">
+              {categories.map((cat) => (
+                <button
+                  type="button"
+                  key={cat}
+                  onClick={() => setCategoryFilter(cat)}
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold ${
+                    categoryFilter === cat
+                      ? 'bg-[#373DA2] text-white'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+
+            <div className="max-h-64 overflow-y-auto space-y-2">
+              {filteredTemplates.map((t) => {
+                const selected = selectedTemplateId === t.id;
+                return (
+                  <button
+                    type="button"
+                    key={t.id}
+                    onClick={() => setSelectedTemplateId(t.id)}
+                    className={`w-full p-3.5 rounded-2xl border text-left flex items-center justify-between gap-2 ${
+                      selected
+                        ? 'border-[#bd003c] bg-rose-50 dark:bg-rose-950/40'
+                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                        {t.name}
+                      </p>
+                      <p className="text-[10px] font-bold text-[#bd003c] mt-0.5">
+                        v{t.version} · ACTIVA
+                      </p>
+                    </div>
+                    {selected && <Check className="w-5 h-5 text-[#bd003c] shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Paso 3: Revisar */}
+        {step === 3 && selectedPatient && selectedTemplate && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <AvatarInitials name={selectedPatient.fullName} size="lg" />
+                <div>
+                  <p className="font-extrabold text-slate-900 dark:text-white">
+                    {displayNameBySurname(selectedPatient.fullName)}
+                  </p>
+                  <p className="text-xs text-slate-500">{selectedPatient.dni}</p>
+                </div>
               </div>
-            )}
-          </div>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <p className="text-xs font-bold text-slate-500 uppercase">Tratamiento</p>
+                <p className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {selectedTemplate.name}
+                </p>
+                <p className="text-[10px] font-bold text-[#bd003c]">
+                  v{selectedTemplate.version} · {selectedTemplate.category}
+                </p>
+              </div>
+            </div>
 
-          <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 shadow-sm space-y-3">
-            <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-              Título
-            </label>
-            <input
-              type="text"
-              readOnly
-              value={selectedTemplate?.name || ''}
-              className="w-full text-sm p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-semibold cursor-not-allowed outline-hidden"
-            />
-          </div>
+            <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 space-y-2">
+              <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                Título del documento
+              </label>
+              <input
+                type="text"
+                value={documentTitle}
+                onChange={(e) => setDocumentTitle(e.target.value)}
+                className="w-full py-3.5 px-4 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
+              />
+            </div>
 
-          <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4 shadow-sm space-y-3">
-            <label className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-              Texto
-            </label>
-            <textarea
-              readOnly
-              rows={5}
-              value={selectedTemplate?.content || ''}
-              className="w-full text-sm p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 font-medium leading-relaxed cursor-not-allowed outline-hidden"
-            />
+            <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4">
+              <p className="text-xs font-bold text-slate-500 uppercase mb-2">Vista previa</p>
+              <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed line-clamp-6">
+                {selectedTemplate.content}
+              </p>
+            </div>
           </div>
+        )}
 
-          <div className="pt-1 space-y-3">
-            <button
-              type="submit"
-              disabled={!selectedPatient || !selectedTemplate}
-              className="w-full min-h-[3.5rem] py-4 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-base flex items-center justify-center gap-2"
-            >
-              <Send className="w-5 h-5" />
-              Crear y enviar a firma
-            </button>
-            <button
-              type="button"
-              onClick={onCancel}
-              className="w-full py-3 rounded-2xl text-slate-600 dark:text-slate-300 font-bold text-sm hover:bg-white/70 dark:hover:bg-slate-800"
-            >
-              Cancelar
-            </button>
-          </div>
-        </form>
+        {/* Footer acciones */}
+        <div className="fixed bottom-0 inset-x-0 lg:static lg:mt-5 z-20 bg-white/95 dark:bg-slate-900/95 border-t border-slate-200 dark:border-slate-800 lg:border-0 lg:bg-transparent p-4 lg:p-0 flex gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              if (step === 1) onCancel();
+              else setStep((step - 1) as Step);
+            }}
+            className="flex-1 py-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold text-sm text-slate-700 dark:text-slate-200"
+          >
+            {step === 1 ? 'Cancelar' : 'Atrás'}
+          </button>
+          <button
+            type="button"
+            disabled={!canNext}
+            onClick={goNext}
+            className="flex-[1.4] py-3.5 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] disabled:opacity-40 text-white font-extrabold text-sm flex items-center justify-center gap-1.5"
+          >
+            {step === 3 ? 'Crear y enviar' : 'Siguiente'}
+            {step < 3 && <ChevronRight className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
     </div>
   );

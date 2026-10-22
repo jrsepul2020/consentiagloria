@@ -1,11 +1,19 @@
 import { jsPDF } from 'jspdf';
 import { Consent, ClinicSettings } from '../types';
-import { supabase } from '../lib/supabaseClient';
+import {
+  uploadConsentPdf,
+  getStorageSignedUrl,
+  fetchSignatureAsDataUrl,
+} from '../lib/consentStorage';
 
 /**
  * Builds the jsPDF instance for a consent document.
+ * Usa signatureData (data URL en memoria) o descarga signaturePath desde Storage.
  */
-export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettings): jsPDF {
+export async function buildConsentJsPdf(
+  consent: Consent,
+  clinicSettings: ClinicSettings
+): Promise<jsPDF> {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -20,19 +28,27 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
 
   const shortId = consent.id ? `DOC-${consent.id.slice(0, 8).toUpperCase()}` : 'DOC-001';
 
-  // Header Renderer
+  let signatureImage = consent.signatureData;
+  if ((!signatureImage || !signatureImage.startsWith('data:image')) && consent.signaturePath) {
+    signatureImage = (await fetchSignatureAsDataUrl(consent.signaturePath)) || undefined;
+  }
+
   const renderPageHeader = (isFirstPage: boolean) => {
     if (isFirstPage) {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(15);
-      doc.setTextColor(189, 0, 60); // #bd003c
+      doc.setTextColor(189, 0, 60);
       doc.text(clinicSettings.clinicName.toUpperCase(), margin, y);
 
       y += 5.5;
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
       doc.setTextColor(100, 100, 100);
-      doc.text(`${clinicSettings.professionalName} — ${clinicSettings.professionalTitle}`, margin, y);
+      doc.text(
+        `${clinicSettings.professionalName} — ${clinicSettings.professionalTitle}`,
+        margin,
+        y
+      );
 
       if (clinicSettings.medicalLicense) {
         y += 4.5;
@@ -43,7 +59,6 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
       doc.setDrawColor(220, 220, 220);
       doc.line(margin, y, pageWidth - margin, y);
 
-      // Title & REF
       y += 10;
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(13);
@@ -59,9 +74,12 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
       doc.setFontSize(8.5);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(120, 120, 120);
-      doc.text(`Categoría: ${consent.category}  |  Versión: v${consent.templateVersion}`, margin, y);
+      doc.text(
+        `Categoría: ${consent.category}  |  Versión: v${consent.templateVersion}`,
+        margin,
+        y
+      );
 
-      // Patient Box
       y += 8;
       doc.setFillColor(248, 249, 250);
       doc.roundedRect(margin, y, contentWidth, 20, 3, 3, 'F');
@@ -98,7 +116,6 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
 
   renderPageHeader(true);
 
-  // Content Section
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(30, 30, 30);
@@ -118,7 +135,6 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
       doc.addPage();
       y = 20;
       renderPageHeader(false);
-
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
       doc.setTextColor(50, 50, 50);
@@ -128,8 +144,6 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
   }
 
   y += 6;
-
-  // Signature Section (~38mm height)
   const signatureBlockHeight = 38;
 
   if (y + signatureBlockHeight > pageBottomLimit) {
@@ -137,18 +151,15 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
     doc.addPage();
     y = 25;
     renderPageHeader(false);
-
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
     doc.setTextColor(30, 30, 30);
     doc.text('HOJA DE FIRMA Y CIERRE DEL DOCUMENTO', margin, y);
-
     y += 5;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.5);
     doc.setTextColor(100, 100, 100);
     doc.text(`Paciente: ${consent.patientNameSnapshot} (${consent.patientDniSnapshot})`, margin, y);
-
     y += 10;
   }
 
@@ -180,10 +191,9 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
 
   y += 5;
 
-  // Signature Image (38x15mm)
-  if (consent.signatureData && consent.signatureData.startsWith('data:image')) {
+  if (signatureImage && signatureImage.startsWith('data:image')) {
     try {
-      doc.addImage(consent.signatureData, 'PNG', margin, y, 38, 15);
+      doc.addImage(signatureImage, 'PNG', margin, y, 38, 15);
       y += 17;
     } catch (err) {
       console.warn('Could not embed signature image in PDF:', err);
@@ -195,9 +205,7 @@ export function buildConsentJsPdf(consent: Consent, clinicSettings: ClinicSettin
   doc.setTextColor(100, 100, 100);
   doc.text(`${consent.patientNameSnapshot} — DNI ${consent.patientDniSnapshot}`, margin, y + 3);
 
-  // Final page footer
   renderPageFooter(doc, shortId, pageWidth);
-
   return doc;
 }
 
@@ -218,60 +226,28 @@ function renderPageFooter(doc: jsPDF, shortId: string, pageWidth: number) {
   );
 }
 
-/**
- * Generates and uploads the consent PDF to Supabase Storage bucket 'consent-pdfs'.
- */
 export async function generateAndUploadConsentPdf(
   consent: Consent,
   clinicSettings: ClinicSettings
 ): Promise<{ pdfPath: string; pdfSize: number } | null> {
   try {
-    const doc = buildConsentJsPdf(consent, clinicSettings);
+    const doc = await buildConsentJsPdf(consent, clinicSettings);
     const pdfBlob = doc.output('blob');
-    const pdfSize = pdfBlob.size;
-    const fileName = `consent-${consent.id}-${Date.now()}.pdf`;
-
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('consent-pdfs')
-      .upload(fileName, pdfBlob, {
-        contentType: 'application/pdf',
-        upsert: true,
-      });
-
-    if (uploadError) {
-      console.warn('Supabase Storage upload warning (bucket consent-pdfs):', uploadError.message);
-      return { pdfPath: fileName, pdfSize };
+    const uploaded = await uploadConsentPdf(consent.id, pdfBlob);
+    if (!uploaded) {
+      return { pdfPath: `consent-${consent.id}.pdf`, pdfSize: pdfBlob.size };
     }
-
-    return { pdfPath: uploadData?.path || fileName, pdfSize };
+    return { pdfPath: uploaded.path, pdfSize: uploaded.size };
   } catch (error) {
     console.error('Error generating PDF:', error);
     return null;
   }
 }
 
-/**
- * Get a downloadable or viewable signed URL for a PDF path in 'consent-pdfs'.
- */
 export async function getConsentPdfSignedUrl(pdfPath: string): Promise<string | null> {
-  try {
-    const { data, error } = await supabase.storage
-      .from('consent-pdfs')
-      .createSignedUrl(pdfPath, 60 * 60);
-
-    if (error || !data?.signedUrl) {
-      return null;
-    }
-    return data.signedUrl;
-  } catch (err) {
-    return null;
-  }
+  return getStorageSignedUrl('consent-pdfs', pdfPath);
 }
 
-/**
- * Opens or downloads a signed consent PDF. First tries Supabase Storage signed URL,
- * and if unavailable, generates it dynamically on-the-fly in browser as Blob URL.
- */
 export async function openOrDownloadConsentPdf(
   consent: Consent,
   clinicSettings: ClinicSettings
@@ -284,9 +260,8 @@ export async function openOrDownloadConsentPdf(
     }
   }
 
-  // Fallback: Generate dynamically on-the-fly
-  const doc = buildConsentJsPdf(consent, clinicSettings);
+  const doc = await buildConsentJsPdf(consent, clinicSettings);
   const blob = doc.output('blob');
-  const blobUrl = URL.createObjectURL(blob);
-  window.open(blobUrl, '_blank');
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
 }

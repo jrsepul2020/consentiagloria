@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase, getSession, signOut } from './lib/supabaseClient';
 import { supabaseService } from './services/supabaseService';
 import { NavTab, BottomNav } from './components/BottomNav';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { NotificationDrawer } from './components/NotificationDrawer';
-import { SignatureModal } from './components/SignatureModal';
 import { NewTemplateModal } from './components/NewTemplateModal';
 import { LoginPage } from './components/LoginPage';
 import { HomeView } from './components/views/HomeView';
@@ -15,18 +14,26 @@ import { TemplatesView } from './components/views/TemplatesView';
 import { SettingsView } from './components/views/SettingsView';
 import { NewClientView } from './components/views/NewClientView';
 import { NewConsentView } from './components/views/NewConsentView';
-import { Consent, ClinicSettings, ConsentTemplate } from './types';
+import { ClientDetailView } from './components/views/ClientDetailView';
+import { ConsentDetailView } from './components/views/ConsentDetailView';
+import { StatsView } from './components/views/StatsView';
+import { Consent, ClinicSettings, ConsentTemplate, Patient } from './types';
 import { CheckCircle } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 
-type FormScreen = null | 'nuevo-cliente' | 'nuevo-consentimiento';
+type FormScreen =
+  | null
+  | 'nuevo-cliente'
+  | 'nuevo-consentimiento'
+  | 'ficha-cliente'
+  | 'detalle-consentimiento'
+  | 'estadisticas';
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
 
   useEffect(() => {
     getSession().then((s) => setSession(s));
-
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, s) => {
@@ -35,9 +42,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    return localStorage.getItem('darkMode') === 'true';
-  });
+  const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('darkMode') === 'true');
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
@@ -64,7 +69,6 @@ export default function App() {
     supabaseService.getTemplates()
   );
   const [notifications, setNotifications] = useState(() => supabaseService.getNotifications());
-  const [activities, setActivities] = useState(() => supabaseService.getActivities());
 
   const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
   const [newClientDraftName, setNewClientDraftName] = useState('');
@@ -73,8 +77,8 @@ export default function App() {
 
   const [preselectedPatientId, setPreselectedPatientId] = useState<string | undefined>(undefined);
   const [preselectedTemplateId, setPreselectedTemplateId] = useState<string | undefined>(undefined);
-  const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
-  const [activeConsentForSigning, setActiveConsentForSigning] = useState<Consent | null>(null);
+  const [selectedPatientId, setSelectedPatientId] = useState<string | undefined>(undefined);
+  const [selectedConsentId, setSelectedConsentId] = useState<string | undefined>(undefined);
 
   const [toastMessage, setToastMessage] = useState<{ title: string; body: string } | null>(null);
 
@@ -85,7 +89,6 @@ export default function App() {
       setConsents(supabaseService.getConsents());
       setTemplates(supabaseService.getTemplates());
       setNotifications(supabaseService.getNotifications());
-      setActivities(supabaseService.getActivities());
     });
     return () => unsubscribe();
   }, []);
@@ -95,12 +98,36 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4500);
   };
 
+  const selectedPatient = useMemo(
+    () => patients.find((p) => p.id === selectedPatientId) || null,
+    [patients, selectedPatientId]
+  );
+
+  const selectedConsent = useMemo(
+    () => consents.find((c) => c.id === selectedConsentId) || null,
+    [consents, selectedConsentId]
+  );
+
+  const signedTodayCount = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return consents.filter((c) => {
+      if (c.status !== 'FIRMADO' || !c.signedAt) return false;
+      return new Date(c.signedAt) >= today;
+    }).length;
+  }, [consents]);
+
+  const weekCount = useMemo(() => {
+    const start = new Date();
+    start.setDate(start.getDate() - start.getDay());
+    start.setHours(0, 0, 0, 0);
+    return consents.filter((c) => new Date(c.createdAt) >= start).length;
+  }, [consents]);
+
   const openNewClient = (draftName = '', fromConsent = false) => {
     setNewClientDraftName(draftName);
     setOpenClientFromConsent(fromConsent);
-    if (!fromConsent) {
-      setFormReturnTab(activeTab);
-    }
+    if (!fromConsent) setFormReturnTab(activeTab);
     setFormScreen('nuevo-cliente');
   };
 
@@ -112,6 +139,26 @@ export default function App() {
     setFormScreen('nuevo-consentimiento');
   };
 
+  const openClientDetail = (patient: Patient) => {
+    setSelectedPatientId(patient.id);
+    setFormReturnTab(activeTab);
+    setFormScreen('ficha-cliente');
+  };
+
+  const openConsentDetail = (consent: Consent) => {
+    setSelectedConsentId(consent.id);
+    if (formScreen !== 'ficha-cliente') {
+      setSelectedPatientId(undefined);
+      setFormReturnTab(activeTab);
+    }
+    setFormScreen('detalle-consentimiento');
+  };
+
+  const openStats = () => {
+    setFormReturnTab(activeTab);
+    setFormScreen('estadisticas');
+  };
+
   const closeFormScreen = () => {
     if (formScreen === 'nuevo-cliente' && openClientFromConsent) {
       setOpenClientFromConsent(false);
@@ -119,9 +166,16 @@ export default function App() {
       setFormScreen('nuevo-consentimiento');
       return;
     }
+    if (formScreen === 'detalle-consentimiento' && selectedPatientId) {
+      setFormScreen('ficha-cliente');
+      setSelectedConsentId(undefined);
+      return;
+    }
     setFormScreen(null);
     setOpenClientFromConsent(false);
     setNewClientDraftName('');
+    setSelectedPatientId(undefined);
+    setSelectedConsentId(undefined);
     setActiveTab(formReturnTab);
   };
 
@@ -129,6 +183,8 @@ export default function App() {
     setFormScreen(null);
     setOpenClientFromConsent(false);
     setNewClientDraftName('');
+    setSelectedPatientId(undefined);
+    setSelectedConsentId(undefined);
     setActiveTab(tab);
   };
 
@@ -149,8 +205,8 @@ export default function App() {
       return;
     }
 
-    setFormScreen(null);
-    setActiveTab('clientes');
+    setSelectedPatientId(newPatient.id);
+    setFormScreen('ficha-cliente');
   };
 
   const handleCreateConsent = (consentData: {
@@ -168,13 +224,8 @@ export default function App() {
       '⚡ Consentimiento Creado',
       `Enviado a ${newConsent.patientNameSnapshot} para firma.`
     );
-    setFormScreen(null);
-    setActiveTab('consentimientos');
-  };
-
-  const handleOpenSignatureModal = (consent: Consent) => {
-    setActiveConsentForSigning(consent);
-    setIsSignatureModalOpen(true);
+    setSelectedConsentId(newConsent.id);
+    setFormScreen('detalle-consentimiento');
   };
 
   const handleSignComplete = (consentId: string, signatureData: string) => {
@@ -182,14 +233,14 @@ export default function App() {
     if (signed) {
       triggerToast(
         '🎉 ¡Firma Confirmada!',
-        `${signed.patientNameSnapshot} firmó "${signed.title}". Generando PDF...`
+        `${signed.patientNameSnapshot} firmó "${signed.title}".`
       );
     }
   };
 
   const handleSimulatePush = () => {
     supabaseService.simulateIncomingPush();
-    triggerToast('⚡ Supabase Realtime', 'Nueva firma biométrica procesada.');
+    triggerToast('⚡ Notificación', 'Nueva actividad de firma.');
   };
 
   const handleSignOut = async () => {
@@ -215,10 +266,7 @@ export default function App() {
         content: data.content,
         version: data.version,
       });
-      triggerToast(
-        '✓ Plantilla Actualizada',
-        `Se ha guardado la versión v${data.version} de "${data.name}".`
-      );
+      triggerToast('✓ Plantilla Actualizada', `"${data.name}" v${data.version}`);
     } else {
       supabaseService.addTemplate({
         name: data.name,
@@ -226,7 +274,7 @@ export default function App() {
         content: data.content,
         version: data.version,
       });
-      triggerToast('✓ Plantilla Creada', `Plantilla "${data.name}" lista para ser utilizada.`);
+      triggerToast('✓ Plantilla Creada', `"${data.name}" lista`);
     }
   };
 
@@ -235,13 +283,10 @@ export default function App() {
     triggerToast('Estado de Plantilla', `Plantilla ${!currentActive ? 'activada' : 'desactivada'}.`);
   };
 
-  const handleUseTemplate = (template: ConsentTemplate) => {
-    openNewConsent(undefined, template.id);
-  };
-
-  const pendingCount = consents.filter((c) => c.status === 'PENDIENTE').length;
-  const signedCount = consents.filter((c) => c.status === 'FIRMADO').length;
+  const pendingCount = supabaseService.getPendingCount();
+  const signedCount = supabaseService.getSignedCount();
   const unreadNotifCount = supabaseService.getUnreadNotificationsCount();
+  const isFormScreen = formScreen !== null;
 
   if (session === undefined) {
     return (
@@ -254,8 +299,6 @@ export default function App() {
   if (session === null) {
     return <LoginPage onLoginSuccess={() => {}} />;
   }
-
-  const isFormScreen = formScreen !== null;
 
   return (
     <div
@@ -298,7 +341,13 @@ export default function App() {
           unreadCount={unreadNotifCount}
         />
 
-        <main className="flex-1 px-4 md:px-8 lg:px-10 py-4 lg:py-6 overflow-y-auto">
+        <main
+          className={`flex-1 overflow-y-auto py-4 lg:py-6 ${
+            formScreen === 'nuevo-cliente' || formScreen === 'nuevo-consentimiento'
+              ? 'px-2 sm:px-4 md:px-6 lg:px-10'
+              : 'px-4 md:px-8 lg:px-10'
+          }`}
+        >
           {formScreen === 'nuevo-cliente' && (
             <NewClientView
               initialFullName={newClientDraftName}
@@ -319,17 +368,44 @@ export default function App() {
             />
           )}
 
+          {formScreen === 'ficha-cliente' && selectedPatient && (
+            <ClientDetailView
+              patient={selectedPatient}
+              consents={consents}
+              onNewConsent={() => openNewConsent(selectedPatient.id)}
+              onOpenConsent={openConsentDetail}
+            />
+          )}
+
+          {formScreen === 'detalle-consentimiento' && selectedConsent && (
+            <ConsentDetailView
+              document={selectedConsent}
+              onSignComplete={handleSignComplete}
+              onClose={closeFormScreen}
+            />
+          )}
+
+          {formScreen === 'estadisticas' && <StatsView consents={consents} />}
+
           {!isFormScreen && activeTab === 'inicio' && (
             <HomeView
               doctorName={clinicSettings.professionalName}
               pendingCount={pendingCount}
-              totalConsentsCount={consents.length}
+              totalConsentsCount={supabaseService.getTotalConsentsCount()}
               signedCount={signedCount}
-              activities={activities}
-              recentConsents={consents.slice(0, 8)}
+              signedTodayCount={signedTodayCount}
+              weekCount={weekCount}
+              recentConsents={[...consents]
+                .sort(
+                  (a, b) =>
+                    new Date(b.updatedAt || b.createdAt).getTime() -
+                    new Date(a.updatedAt || a.createdAt).getTime()
+                )
+                .slice(0, 8)}
               onNewClient={() => openNewClient('')}
               onNewConsent={() => openNewConsent()}
-              onOpenSignModal={handleOpenSignatureModal}
+              onOpenConsent={openConsentDetail}
+              onOpenStats={openStats}
               onNavigateTab={(tab, statusFilter) => {
                 if (statusFilter) setDocumentStatusFilter(statusFilter);
                 handleChangeTab(tab);
@@ -341,7 +417,7 @@ export default function App() {
             <ClientsView
               patients={patients}
               onNewClient={() => openNewClient('')}
-              onNewConsentForPatient={(patientId) => openNewConsent(patientId)}
+              onOpenClient={openClientDetail}
             />
           )}
 
@@ -351,7 +427,7 @@ export default function App() {
               statusFilter={documentStatusFilter}
               onStatusFilterChange={(status) => setDocumentStatusFilter(status)}
               onNewConsent={() => openNewConsent()}
-              onOpenSignModal={handleOpenSignatureModal}
+              onOpenConsent={openConsentDetail}
             />
           )}
 
@@ -367,7 +443,7 @@ export default function App() {
                 setIsNewTemplateModalOpen(true);
               }}
               onToggleActive={handleToggleTemplateActive}
-              onUseTemplate={handleUseTemplate}
+              onUseTemplate={(tmpl) => openNewConsent(undefined, tmpl.id)}
             />
           )}
 
@@ -380,6 +456,7 @@ export default function App() {
               onToggleDarkMode={toggleDarkMode}
               onSimulatePush={handleSimulatePush}
               onSignOut={handleSignOut}
+              onOpenTemplates={() => handleChangeTab('plantillas')}
             />
           )}
         </main>
@@ -400,13 +477,6 @@ export default function App() {
         onMarkRead={(id) => supabaseService.markNotificationAsRead(id)}
         onMarkAllRead={() => supabaseService.markAllNotificationsAsRead()}
         onSimulatePush={handleSimulatePush}
-      />
-
-      <SignatureModal
-        isOpen={isSignatureModalOpen}
-        onClose={() => setIsSignatureModalOpen(false)}
-        document={activeConsentForSigning}
-        onSignComplete={handleSignComplete}
       />
 
       <NewTemplateModal

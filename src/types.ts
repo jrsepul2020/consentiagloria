@@ -26,7 +26,10 @@ export interface Consent {
   templateVersion: number;
   contentSnapshot: string;       // snapshot of template content at consent creation
   status: DocumentStatus;
-  signatureData?: string;        // base64 PNG of drawn signature
+  /** @deprecated Prefer signaturePath — solo en memoria al firmar / legacy */
+  signatureData?: string;
+  /** Ruta en bucket consent-signatures (PNG), no base64 en BD */
+  signaturePath?: string;
   signedAt?: string;
   pdfPath?: string;              // path in consent-pdfs Storage bucket
   createdAt: string;
