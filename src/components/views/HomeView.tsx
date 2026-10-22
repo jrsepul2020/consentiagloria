@@ -1,7 +1,6 @@
 import React from 'react';
 import { Clock, UserPlus, FilePlus, ShieldCheck, ChevronRight } from 'lucide-react';
 import { ActivityLog, Consent } from '../../types';
-
 import { NavTab } from '../Sidebar';
 
 interface HomeViewProps {
@@ -21,86 +20,83 @@ export const HomeView: React.FC<HomeViewProps> = ({
   doctorName,
   pendingCount,
   totalConsentsCount,
-  signedCount,
-  activities,
   recentConsents,
   onNewClient,
   onNewConsent,
   onOpenSignModal,
   onNavigateTab,
 }) => {
-  const pendingPercentage = totalConsentsCount > 0
-    ? Math.round((pendingCount / totalConsentsCount) * 100)
-    : 0;
+  const pendingPercentage =
+    totalConsentsCount > 0 ? Math.round((pendingCount / totalConsentsCount) * 100) : 0;
 
   return (
-    <div className="space-y-5 pb-24 lg:pb-6 animate-fade-in max-w-5xl">
-      {/* Greeting Section */}
-      <div className="pt-2">
-        <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+    <div className="space-y-4 lg:space-y-5 pb-24 lg:pb-6 max-w-5xl">
+      {/* Greeting */}
+      <div className="pt-1 lg:pt-2">
+        <h2 className="text-2xl lg:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
           ¡Hola, {doctorName.split(' ')[1] ? `Dra. ${doctorName.split(' ')[1]}` : doctorName}!
         </h2>
-        <p className="text-slate-500 dark:text-slate-400 font-medium text-base mt-1">
-          Aquí tienes el resumen de hoy
+        <p className="text-slate-500 dark:text-slate-400 font-medium text-sm lg:text-base mt-1">
+          Resumen de hoy
         </p>
       </div>
 
-      {/* Reduced Compact Pending Signatures Banner */}
-      <div 
+      {/* Firmas pendientes — naranja destacado */}
+      <button
+        type="button"
         onClick={() => onNavigateTab('consentimientos', 'PENDIENTE')}
-        className="p-3.5 px-4 bg-[#fcf9f5] dark:bg-slate-800/90 border border-amber-200 dark:border-amber-900/40 rounded-2xl flex items-center justify-between shadow-2xs hover:shadow-md transition-all cursor-pointer group"
+        className="w-full p-5 lg:p-4 lg:px-4 bg-orange-500 hover:bg-orange-600 border-2 border-orange-600 dark:border-orange-400 rounded-2xl lg:rounded-2xl flex items-center justify-between gap-3 cursor-pointer text-left"
       >
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#fef3c7] dark:bg-amber-950/70 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Clock className="w-5 h-5 text-[#d97706] dark:text-amber-400" />
+        <div className="flex items-center gap-3.5 min-w-0">
+          <div className="w-14 h-14 lg:w-10 lg:h-10 rounded-2xl lg:rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+            <Clock className="w-7 h-7 lg:w-5 lg:h-5 text-white" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-extrabold text-slate-900 dark:text-white">Firmas Pendientes</span>
-              <span className="px-2 py-0.5 rounded-full bg-[#fef3c7] dark:bg-amber-950/80 text-[#b45309] dark:text-amber-300 text-[10px] font-black">
-                {pendingPercentage}% del total
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-lg lg:text-sm font-extrabold text-white">Firmas pendientes</span>
+              <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-xs lg:text-[10px] font-black">
+                {pendingPercentage}%
               </span>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
-              Toca para ver y gestionar solicitudes pendientes
+            <p className="text-sm lg:text-xs text-orange-50 font-medium mt-0.5">
+              Toca para gestionarlas
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-2xl font-black text-[#d97706] dark:text-amber-400">{pendingCount}</span>
-          <ChevronRight className="w-5 h-5 text-amber-500 dark:text-amber-400 group-hover:translate-x-0.5 transition-transform" />
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="text-4xl lg:text-2xl font-black text-white tabular-nums">{pendingCount}</span>
+          <ChevronRight className="w-6 h-6 lg:w-5 lg:h-5 text-white" />
         </div>
-      </div>
+      </button>
 
-      {/* Primary Action Buttons (Nuevo Consentimiento & Nuevo Cliente) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {/* Main CTA: Nuevo Consentimiento */}
+      {/* Acciones principales — grandes en móvil */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 lg:gap-3">
         <button
+          type="button"
           onClick={onNewConsent}
-          className="w-full py-4 px-6 bg-[#373DA2] hover:bg-[#2b3085] active:scale-[0.98] text-white rounded-2xl font-bold text-lg shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-3 cursor-pointer group"
+          className="w-full min-h-[4.5rem] lg:min-h-0 py-5 lg:py-4 px-6 bg-[#373DA2] hover:bg-[#2b3085] text-white rounded-2xl font-bold text-xl lg:text-lg flex items-center justify-center gap-3 cursor-pointer"
         >
-          <FilePlus className="w-6 h-6 stroke-[2.5] text-amber-300 group-hover:scale-110 transition-transform" />
-          <span>Nuevo Consentimiento</span>
+          <FilePlus className="w-7 h-7 lg:w-6 lg:h-6 stroke-[2.5] text-amber-300 shrink-0" />
+          <span>Nuevo consentimiento</span>
         </button>
 
-        {/* Secondary Action: Nuevo Cliente */}
         <button
+          type="button"
           onClick={onNewClient}
-          className="w-full py-3.5 px-6 bg-[#bd003c] hover:bg-[#a00033] active:scale-[0.98] text-white rounded-2xl font-bold text-base shadow-sm hover:shadow-md transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+          className="w-full min-h-[4.5rem] lg:min-h-0 py-5 lg:py-3.5 px-6 bg-[#bd003c] hover:bg-[#a00033] text-white rounded-2xl font-bold text-xl lg:text-base flex items-center justify-center gap-3 cursor-pointer"
         >
-          <UserPlus className="w-5 h-5 stroke-[2.5]" />
-          <span>Nuevo Cliente</span>
+          <UserPlus className="w-7 h-7 lg:w-5 lg:h-5 stroke-[2.5] shrink-0" />
+          <span>Nuevo cliente</span>
         </button>
       </div>
 
-      {/* Recent Activity Section (Actividad reciente) */}
-      <div className="space-y-3 pt-2">
+      {/* Actividad reciente — solo escritorio */}
+      <div className="hidden lg:block space-y-3 pt-2">
         <div className="flex items-center justify-between">
-          <h3 className="font-extrabold text-lg text-slate-900 dark:text-white">
-            Actividad reciente
-          </h3>
+          <h3 className="font-extrabold text-lg text-slate-900 dark:text-white">Actividad reciente</h3>
           <button
+            type="button"
             onClick={() => onNavigateTab('consentimientos')}
             className="text-xs font-bold text-[#373DA2] dark:text-blue-400 hover:underline flex items-center gap-0.5"
           >
@@ -117,11 +113,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
               <div
                 key={doc.id}
                 onClick={() => {
-                  if (!isSigned) {
-                    onOpenSignModal(doc);
-                  }
+                  if (!isSigned) onOpenSignModal(doc);
                 }}
-                className={`p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between gap-3 shadow-2xs hover:shadow-sm transition-all cursor-pointer ${
+                className={`p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between gap-3 cursor-pointer ${
                   !isSigned ? 'hover:border-blue-300' : ''
                 }`}
               >
@@ -134,14 +128,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   </p>
                 </div>
 
-                {/* Status Badges exact visual match */}
                 <div>
                   {isSigned ? (
                     <span className="inline-block px-3 py-1 rounded-xl bg-[#d1fae5] text-[#065f46] dark:bg-emerald-950/80 dark:text-emerald-300 text-xs font-extrabold tracking-wider uppercase">
                       FIRMADO
                     </span>
                   ) : (
-                    <span className="inline-block px-3 py-1 rounded-xl bg-[#fef3c7] text-[#92400e] dark:bg-amber-950/80 dark:text-amber-300 text-xs font-extrabold tracking-wider uppercase">
+                    <span className="inline-block px-3 py-1 rounded-xl bg-orange-500 text-white text-xs font-extrabold tracking-wider uppercase">
                       PENDIENTE
                     </span>
                   )}
@@ -152,8 +145,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
       </div>
 
-      {/* Security & Cloud Badge */}
-      <div className="p-4 bg-slate-100/80 dark:bg-slate-800/50 rounded-2xl border border-slate-200/60 dark:border-slate-700/50 flex items-center gap-3">
+      {/* Badge seguridad — solo escritorio */}
+      <div className="hidden lg:flex p-4 bg-slate-100/80 dark:bg-slate-800/50 rounded-2xl border border-slate-200/60 dark:border-slate-700/50 items-center gap-3">
         <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
         <p className="text-xs text-slate-600 dark:text-slate-300 font-medium">
           Cifrado RGPD y firma biométrica vinculada a Supabase Cloud con respaldo de alta disponibilidad.
