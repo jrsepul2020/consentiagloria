@@ -5,6 +5,7 @@ import { StatusBadge } from '../StatusBadge';
 import { openOrDownloadConsentPdf } from '../../utils/pdfGenerator';
 import { supabaseService } from '../../services/supabaseService';
 import { getStorageSignedUrl } from '../../lib/consentStorage';
+import { isNeuromodulatorConsent } from '../../utils/consentHelpers';
 
 interface ConsentDetailViewProps {
   document: Consent;
@@ -21,17 +22,51 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
 }) => {
   const [tab, setTab] = useState<Tab>(document.status === 'PENDIENTE' ? 'firmas' : 'preview');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [isDrawing, setIsDrawing] = useState(false);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   const [hasSignature, setHasSignature] = useState(false);
   const [accepted, setAccepted] = useState(false);
   const [showError, setShowError] = useState(false);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [storedSignatureUrl, setStoredSignatureUrl] = useState<string | null>(null);
+  const isNeuro = isNeuromodulatorConsent(document);
+  const [adminNumber, setAdminNumber] = useState(document.administrationNumber || '');
+  const [adminDate, setAdminDate] = useState(
+    document.administrationDate || new Date().toISOString().slice(0, 10)
+  );
+  const [savingAdmin, setSavingAdmin] = useState(false);
+  const [adminSaved, setAdminSaved] = useState(false);
+
+  const setupCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const parent = canvas.parentElement;
+    if (!parent) return;
+
+    const cssWidth = parent.clientWidth || 340;
+    const cssHeight = 176;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.strokeStyle = '#bd003c';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  };
 
   useEffect(() => {
     setAccepted(false);
     setShowError(false);
     setHasSignature(false);
+    drawingRef.current = false;
+    lastPointRef.current = null;
     setTab(document.status === 'PENDIENTE' ? 'firmas' : 'preview');
     setStoredSignatureUrl(null);
 
@@ -42,61 +77,112 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
     } else if (document.signatureData?.startsWith('data:image')) {
       setStoredSignatureUrl(document.signatureData);
     }
-  }, [document.id, document.status, document.signaturePath, document.signatureData]);
+    setAdminNumber(document.administrationNumber || '');
+    setAdminDate(document.administrationDate || new Date().toISOString().slice(0, 10));
+  }, [document.id, document.status, document.signaturePath, document.signatureData, document.administrationNumber, document.administrationDate]);
+
+  const saveAdministration = async () => {
+    setSavingAdmin(true);
+    setAdminSaved(false);
+    try {
+      await supabaseService.updateConsentAdministration(document.id, {
+        administrationNumber: adminNumber.trim(),
+        administrationDate: adminDate,
+      });
+      setAdminSaved(true);
+      setTimeout(() => setAdminSaved(false), 2000);
+    } finally {
+      setSavingAdmin(false);
+    }
+  };
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.strokeStyle = '#bd003c';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-  }, [tab]);
+    if (tab !== 'firmas' || document.status !== 'PENDIENTE') return;
+    setupCanvas();
+    const onResize = () => {
+      setupCanvas();
+      setHasSignature(false);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [tab, document.status]);
 
-  const getPos = (e: React.MouseEvent | React.TouchEvent) => {
+  const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    return { x: clientX - rect.left, y: clientY - rect.top };
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
   };
 
-  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+  const strokeWidthFor = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Force Touch / Apple Pencil: pressure 0–1. Trackpad clic normal ≈ 0.5
+    const p = e.pressure > 0 ? e.pressure : 0.5;
+    return 1.4 + p * 3.2;
+  };
+
+  const startDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
     e.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    setIsDrawing(true);
-    const { x, y } = getPos(e);
+
+    canvas.setPointerCapture(e.pointerId);
+    drawingRef.current = true;
+    const point = getPos(e);
+    lastPointRef.current = point;
+    ctx.lineWidth = strokeWidthFor(e);
     ctx.beginPath();
-    ctx.moveTo(x, y);
-  };
-
-  const draw = (e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault();
-    if (!isDrawing) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const { x, y } = getPos(e);
-    ctx.lineTo(x, y);
+    ctx.moveTo(point.x, point.y);
+    // Punto inicial visible (clic sin arrastrar aún)
+    ctx.lineTo(point.x + 0.01, point.y + 0.01);
     ctx.stroke();
     setHasSignature(true);
   };
 
-  const stopDrawing = () => setIsDrawing(false);
+  const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const point = getPos(e);
+    const last = lastPointRef.current;
+    ctx.lineWidth = strokeWidthFor(e);
+    ctx.beginPath();
+    if (last) ctx.moveTo(last.x, last.y);
+    else ctx.moveTo(point.x, point.y);
+    ctx.lineTo(point.x, point.y);
+    ctx.stroke();
+    lastPointRef.current = point;
+    setHasSignature(true);
+  };
+
+  const stopDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    lastPointRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ya liberado */
+    }
+  };
 
   const clearCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     setHasSignature(false);
+    drawingRef.current = false;
+    lastPointRef.current = null;
   };
 
   const handleSign = () => {
@@ -106,6 +192,12 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
     }
     const canvas = canvasRef.current;
     if (!canvas || !hasSignature) return;
+    if (isNeuro) {
+      void supabaseService.updateConsentAdministration(document.id, {
+        administrationNumber: adminNumber.trim(),
+        administrationDate: adminDate,
+      });
+    }
     onSignComplete(document.id, canvas.toDataURL('image/png'));
   };
 
@@ -167,27 +259,71 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
       )}
 
       {tab === 'datos' && (
-        <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 space-y-4">
-          {[
-            { label: 'Paciente', value: document.patientNameSnapshot },
-            { label: 'DNI', value: document.patientDniSnapshot },
-            { label: 'Tratamiento', value: document.title },
-            { label: 'Categoría', value: document.category },
-            { label: 'Versión plantilla', value: `v${document.templateVersion}` },
-            {
-              label: 'Creado',
-              value: new Date(document.createdAt).toLocaleString('es-ES'),
-            },
-          ].map((row) => (
-            <div key={row.label}>
-              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                {row.label}
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 space-y-4">
+            {[
+              { label: 'Paciente', value: document.patientNameSnapshot },
+              { label: 'DNI', value: document.patientDniSnapshot },
+              { label: 'Tratamiento', value: document.title },
+              { label: 'Categoría', value: document.category },
+              { label: 'Versión plantilla', value: `v${document.templateVersion}` },
+              {
+                label: 'Creado',
+                value: new Date(document.createdAt).toLocaleString('es-ES'),
+              },
+            ].map((row) => (
+              <div key={row.label}>
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                  {row.label}
+                </p>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white mt-0.5">
+                  {row.value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {isNeuro && (
+            <div className="rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-5 space-y-3">
+              <p className="text-sm font-extrabold text-amber-900 dark:text-amber-100">
+                Control neuromoduladores
               </p>
-              <p className="text-sm font-semibold text-slate-900 dark:text-white mt-0.5">
-                {row.value}
+              <p className="text-xs text-amber-800/80 dark:text-amber-200/70">
+                Nº de administración y fecha del producto inyectado.
               </p>
+              <div>
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  Nº de administración
+                </label>
+                <input
+                  type="text"
+                  value={adminNumber}
+                  onChange={(e) => setAdminNumber(e.target.value)}
+                  placeholder="Ej. lote / nº vial"
+                  className="w-full p-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 text-sm outline-hidden focus:ring-2 focus:ring-[#bd003c]"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  Fecha de administración
+                </label>
+                <input
+                  type="date"
+                  value={adminDate}
+                  onChange={(e) => setAdminDate(e.target.value)}
+                  className="w-full p-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 text-sm outline-hidden focus:ring-2 focus:ring-[#bd003c]"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={savingAdmin}
+                onClick={saveAdministration}
+                className="w-full py-3 rounded-2xl bg-[#373DA2] text-white text-sm font-bold disabled:opacity-50"
+              >
+                {savingAdmin ? 'Guardando…' : adminSaved ? 'Guardado' : 'Guardar control'}
+              </button>
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -209,31 +345,69 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
             </div>
           ) : canSign ? (
             <>
+              {isNeuro && (
+                <div className="rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-4 space-y-3">
+                  <p className="text-sm font-extrabold text-amber-900 dark:text-amber-100">
+                    Neuromoduladores — rellenar antes de firmar
+                  </p>
+                  <input
+                    type="text"
+                    value={adminNumber}
+                    onChange={(e) => setAdminNumber(e.target.value)}
+                    placeholder="Nº de administración"
+                    className="w-full p-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 text-sm"
+                  />
+                  <input
+                    type="date"
+                    value={adminDate}
+                    onChange={(e) => setAdminDate(e.target.value)}
+                    className="w-full p-3 rounded-xl border border-amber-200 dark:border-amber-800 bg-white dark:bg-slate-900 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveAdministration}
+                    className="text-xs font-bold text-[#373DA2]"
+                  >
+                    {adminSaved ? '✓ Guardado' : 'Guardar nº y fecha'}
+                  </button>
+                </div>
+              )}
               <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Firma</p>
+                <div className="flex items-center justify-between mb-2 gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Firma</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                      Trackpad Mac: haz clic y arrastra. Force Touch varía el grosor. También
+                      dedo, Pencil o ratón.
+                    </p>
+                  </div>
                   <button
                     type="button"
                     onClick={clearCanvas}
-                    className="text-xs font-bold text-[#bd003c] flex items-center gap-1"
+                    className="shrink-0 text-xs font-bold text-[#bd003c] flex items-center gap-1"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     Limpiar
                   </button>
                 </div>
-                <canvas
-                  ref={canvasRef}
-                  width={340}
-                  height={160}
-                  className="w-full h-40 bg-slate-50 dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-600 rounded-xl touch-none cursor-crosshair"
-                  onMouseDown={startDrawing}
-                  onMouseMove={draw}
-                  onMouseUp={stopDrawing}
-                  onMouseLeave={stopDrawing}
-                  onTouchStart={startDrawing}
-                  onTouchMove={draw}
-                  onTouchEnd={stopDrawing}
-                />
+                <div className="relative w-full">
+                  <canvas
+                    ref={canvasRef}
+                    className="block w-full h-44 bg-slate-50 dark:bg-slate-900 border border-dashed border-slate-300 dark:border-slate-600 rounded-xl touch-none cursor-crosshair select-none"
+                    style={{ touchAction: 'none' }}
+                    onPointerDown={startDrawing}
+                    onPointerMove={draw}
+                    onPointerUp={stopDrawing}
+                    onPointerCancel={stopDrawing}
+                  />
+                  {!hasSignature && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                      <p className="text-xs font-medium text-slate-400 dark:text-slate-500 px-4 text-center">
+                        Firma aquí con el trackpad
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <label className="flex items-start gap-3 p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 cursor-pointer">

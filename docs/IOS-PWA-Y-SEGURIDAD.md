@@ -17,6 +17,7 @@ Ejecuta en el SQL Editor:
 
 Eso:
 - añade `consents.signature_path`
+- migración adicional `20261022_batch_sign_notes_doctor.sql`: notas de paciente, firma doctora, nº/fecha neuromoduladores, bucket `clinic-assets`
 - índices de búsqueda
 - RLS: solo `authenticated`
 - buckets privados `consent-pdfs` y `consent-signatures`

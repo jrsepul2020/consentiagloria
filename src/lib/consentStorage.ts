@@ -2,6 +2,7 @@ import { supabase } from './supabaseClient';
 
 const PDF_BUCKET = 'consent-pdfs';
 const SIGNATURE_BUCKET = 'consent-signatures';
+const CLINIC_BUCKET = 'clinic-assets';
 
 function dataUrlToBlob(dataUrl: string): Blob {
   const [header, base64] = dataUrl.split(',');
@@ -56,8 +57,28 @@ export async function uploadConsentPdf(
   }
 }
 
+/** Sube la firma de la doctora (PNG/JPEG) a clinic-assets. */
+export async function uploadDoctorSignature(dataUrl: string): Promise<string | null> {
+  try {
+    const blob = dataUrlToBlob(dataUrl);
+    const path = `doctor-signature-${Date.now()}.png`;
+    const { data, error } = await supabase.storage.from(CLINIC_BUCKET).upload(path, blob, {
+      contentType: blob.type || 'image/png',
+      upsert: true,
+    });
+    if (error) {
+      console.error('Error uploading doctor signature:', error.message);
+      return null;
+    }
+    return data?.path || path;
+  } catch (err) {
+    console.error('uploadDoctorSignature failed:', err);
+    return null;
+  }
+}
+
 export async function getStorageSignedUrl(
-  bucket: 'consent-pdfs' | 'consent-signatures',
+  bucket: 'consent-pdfs' | 'consent-signatures' | 'clinic-assets',
   path: string,
   expiresInSeconds = 3600
 ): Promise<string | null> {
@@ -73,9 +94,12 @@ export async function getStorageSignedUrl(
 }
 
 /** Descarga firma como data URL para embeber en PDF (sesión de generación). */
-export async function fetchSignatureAsDataUrl(signaturePath: string): Promise<string | null> {
+export async function fetchSignatureAsDataUrl(
+  signaturePath: string,
+  bucket: 'consent-signatures' | 'clinic-assets' = 'consent-signatures'
+): Promise<string | null> {
   try {
-    const { data, error } = await supabase.storage.from(SIGNATURE_BUCKET).download(signaturePath);
+    const { data, error } = await supabase.storage.from(bucket).download(signaturePath);
     if (error || !data) return null;
     return await new Promise((resolve) => {
       const reader = new FileReader();

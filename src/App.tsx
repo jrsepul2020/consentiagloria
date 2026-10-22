@@ -17,6 +17,7 @@ import { NewConsentView } from './components/views/NewConsentView';
 import { ClientDetailView } from './components/views/ClientDetailView';
 import { ConsentDetailView } from './components/views/ConsentDetailView';
 import { StatsView } from './components/views/StatsView';
+import { BatchSignModal } from './components/BatchSignModal';
 import { Consent, ClinicSettings, ConsentTemplate, Patient } from './types';
 import { CheckCircle } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
@@ -41,6 +42,12 @@ export default function App() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // Tras login: cargar datos con rol authenticated (RLS). Evita plantillas vacías.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    void supabaseService.reloadFromServer();
+  }, [session?.user?.id]);
 
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('darkMode') === 'true');
 
@@ -81,6 +88,7 @@ export default function App() {
   const [selectedConsentId, setSelectedConsentId] = useState<string | undefined>(undefined);
 
   const [toastMessage, setToastMessage] = useState<{ title: string; body: string } | null>(null);
+  const [batchSignConsents, setBatchSignConsents] = useState<Consent[] | null>(null);
 
   useEffect(() => {
     const unsubscribe = supabaseService.subscribe(() => {
@@ -280,6 +288,21 @@ export default function App() {
     }
   };
 
+  const handleBatchSignComplete = (signatureData: string) => {
+    if (!batchSignConsents?.length) return;
+    const ids = batchSignConsents.map((c) => c.id);
+    const signed = supabaseService.signConsentsBatch(ids, signatureData);
+    setBatchSignConsents(null);
+    if (signed.length > 0) {
+      triggerToast(
+        '🎉 Firma de sesión',
+        `${signed.length} consentimiento${signed.length === 1 ? '' : 's'} firmado${signed.length === 1 ? '' : 's'} con una sola firma.`
+      );
+    } else {
+      triggerToast('Error', 'No se pudieron firmar los documentos seleccionados.');
+    }
+  };
+
   const handleSimulatePush = () => {
     supabaseService.simulateIncomingPush();
     triggerToast('⚡ Notificación', 'Nueva actividad de firma.');
@@ -470,6 +493,7 @@ export default function App() {
               onStatusFilterChange={(status) => setDocumentStatusFilter(status)}
               onNewConsent={() => openNewConsent()}
               onOpenConsent={openConsentDetail}
+              onBatchSign={(docs) => setBatchSignConsents(docs)}
             />
           )}
 
@@ -511,6 +535,14 @@ export default function App() {
           />
         )}
       </div>
+
+      {batchSignConsents && batchSignConsents.length > 0 && (
+        <BatchSignModal
+          consents={batchSignConsents}
+          onCancel={() => setBatchSignConsents(null)}
+          onConfirm={handleBatchSignComplete}
+        />
+      )}
 
       <NotificationDrawer
         isOpen={isNotificationDrawerOpen}

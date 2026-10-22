@@ -32,6 +32,20 @@ export interface Consent {
   signaturePath?: string;
   signedAt?: string;
   pdfPath?: string;              // path in consent-pdfs Storage bucket
+  /** Solo neuromoduladores: nº / lote de administración */
+  administrationNumber?: string;
+  /** Solo neuromoduladores: fecha de administración (YYYY-MM-DD) */
+  administrationDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Nota clínica acumulable en la ficha del paciente */
+export interface PatientNote {
+  id: string;
+  patientId: string;
+  noteDate: string; // YYYY-MM-DD
+  body: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -60,6 +74,8 @@ export interface ClinicSettings {
   email: string;
   phone: string;
   logoUrl?: string;
+  /** Ruta PNG firma de la doctora en bucket clinic-assets */
+  doctorSignaturePath?: string;
   createdAt: string;
   updatedAt: string;
 }

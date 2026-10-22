@@ -46,6 +46,7 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [documentTitle, setDocumentTitle] = useState('');
   const [saving, setSaving] = useState(false);
+  const [seedingTemplates, setSeedingTemplates] = useState(false);
 
   const isPersistedId = (id: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
@@ -306,10 +307,32 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
             </div>
 
             {latestActiveTemplates.length === 0 && (
-              <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800 rounded-xl px-3 py-3">
-                No hay plantillas en la base de datos. Ve a <strong>Plantillas</strong>, crea al
-                menos una y vuelve aquí.
-              </p>
+              <div className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800 rounded-xl px-3 py-3 space-y-3">
+                <p>
+                  No hay plantillas en la base de datos. Puedes cargar las de ejemplo o crearlas
+                  en <strong>Plantillas</strong>.
+                </p>
+                <button
+                  type="button"
+                  disabled={seedingTemplates}
+                  onClick={async () => {
+                    setSeedingTemplates(true);
+                    try {
+                      const list = await supabaseService.ensureDefaultTemplates();
+                      if (list.length === 0) {
+                        alert(
+                          'No se pudieron crear plantillas. Comprueba que hayas iniciado sesión y que la migración RLS esté aplicada en Supabase.'
+                        );
+                      }
+                    } finally {
+                      setSeedingTemplates(false);
+                    }
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-[#373DA2] text-white text-xs font-extrabold disabled:opacity-60"
+                >
+                  {seedingTemplates ? 'Creando plantillas…' : 'Cargar plantillas de ejemplo'}
+                </button>
+              </div>
             )}
 
             <div className="flex gap-2 overflow-x-auto scrollbar-none pb-0.5">

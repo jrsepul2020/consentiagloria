@@ -14,12 +14,15 @@ interface ClientsViewProps {
   onOpenClient: (patient: Patient) => void;
 }
 
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
 export const ClientsView: React.FC<ClientsViewProps> = ({
   patients,
   onNewClient,
   onOpenClient,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [letterFilter, setLetterFilter] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
@@ -29,10 +32,17 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
     return () => clearTimeout(t);
   }, [searchTerm]);
 
-  const filtered = useMemo(
-    () => [...patients].sort((a, b) => compareBySurnameThenName(a.fullName, b.fullName)),
-    [patients]
-  );
+  const filtered = useMemo(() => {
+    let list = [...patients].sort((a, b) => compareBySurnameThenName(a.fullName, b.fullName));
+    if (letterFilter) {
+      list = list.filter((p) => {
+        const display = displayNameBySurname(p.fullName).trim();
+        const first = display.charAt(0).toUpperCase();
+        return first === letterFilter;
+      });
+    }
+    return list;
+  }, [patients, letterFilter]);
 
   const handleLoadMore = async () => {
     setLoadingMore(true);
@@ -60,9 +70,37 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Buscar cliente..."
+          placeholder="Buscar por nombre, DNI, teléfono o email..."
           className="w-full pl-11 pr-4 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
         />
+      </div>
+
+      <div className="flex gap-1 overflow-x-auto scrollbar-none pb-0.5">
+        <button
+          type="button"
+          onClick={() => setLetterFilter(null)}
+          className={`shrink-0 px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold ${
+            !letterFilter
+              ? 'bg-[#373DA2] text-white'
+              : 'bg-slate-100 dark:bg-slate-800 text-slate-600'
+          }`}
+        >
+          Todos
+        </button>
+        {LETTERS.map((letter) => (
+          <button
+            key={letter}
+            type="button"
+            onClick={() => setLetterFilter(letter === letterFilter ? null : letter)}
+            className={`shrink-0 w-8 py-1.5 rounded-lg text-[11px] font-extrabold ${
+              letterFilter === letter
+                ? 'bg-[#373DA2] text-white'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-600'
+            }`}
+          >
+            {letter}
+          </button>
+        ))}
       </div>
 
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 overflow-hidden">
@@ -70,9 +108,9 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
           <div className="p-10 text-center text-slate-400">
             <UserPlus className="w-10 h-10 mx-auto mb-2 opacity-50" />
             <p className="font-bold text-sm">
-              {searchTerm ? 'Sin resultados' : 'No hay clientes'}
+              {searchTerm || letterFilter ? 'Sin resultados' : 'No hay clientes'}
             </p>
-            {!searchTerm && (
+            {!searchTerm && !letterFilter && (
               <button
                 type="button"
                 onClick={onNewClient}

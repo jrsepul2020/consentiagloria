@@ -6,10 +6,11 @@ import {
   ClinicSettings,
   PushNotification,
   ActivityLog,
+  PatientNote,
 } from '../types';
 import { initialTemplates, initialClinicSettings } from '../data/initialData';
 import { generateAndUploadConsentPdf } from '../utils/pdfGenerator';
-import { uploadConsentSignature } from '../lib/consentStorage';
+import { uploadConsentSignature, uploadDoctorSignature } from '../lib/consentStorage';
 
 export const PAGE_SIZE_PATIENTS = 40;
 export const PAGE_SIZE_CONSENTS = 30;
@@ -34,7 +35,7 @@ function errorMessage(err: unknown, fallback: string): string {
 
 /** Columnas sin signature_data (evita traer base64). signature_path es opcional en BD antigua. */
 const CONSENT_LIST_COLUMNS =
-  'id, patient_id, template_id, patient_name_snapshot, patient_dni_snapshot, title, category, template_version, content_snapshot, status, signature_path, signed_at, pdf_path, created_at, updated_at';
+  'id, patient_id, template_id, patient_name_snapshot, patient_dni_snapshot, title, category, template_version, content_snapshot, status, signature_path, signed_at, pdf_path, administration_number, administration_date, created_at, updated_at';
 
 const CONSENT_LIST_COLUMNS_LEGACY =
   'id, patient_id, template_id, patient_name_snapshot, patient_dni_snapshot, title, category, template_version, content_snapshot, status, signed_at, pdf_path, created_at, updated_at';
@@ -70,6 +71,19 @@ function mapConsent(row: Record<string, unknown>): Consent {
     signatureData: (row.signature_data as string) || undefined,
     signedAt: (row.signed_at as string) || undefined,
     pdfPath: (row.pdf_path as string) || undefined,
+    administrationNumber: (row.administration_number as string) || undefined,
+    administrationDate: (row.administration_date as string) || undefined,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapPatientNote(row: Record<string, unknown>): PatientNote {
+  return {
+    id: row.id as string,
+    patientId: row.patient_id as string,
+    noteDate: (row.note_date as string) || (row.created_at as string)?.slice(0, 10) || '',
+    body: row.body as string,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -98,6 +112,7 @@ function mapClinicSettings(row: Record<string, unknown>): ClinicSettings {
     email: (row.email as string) || '',
     phone: (row.phone as string) || '',
     logoUrl: (row.logo_url as string) || undefined,
+    doctorSignaturePath: (row.doctor_signature_path as string) || undefined,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -126,6 +141,7 @@ class SupabaseService {
   private templatesSeedAttempted = false;
   private notifications: PushNotification[] = [];
   private activities: ActivityLog[] = [];
+  private patientNotes: PatientNote[] = [];
   private listeners: Set<Listener> = new Set();
   private realtimeChannel: ReturnType<typeof supabase.channel> | null = null;
 
@@ -145,15 +161,29 @@ class SupabaseService {
   /** Evita que Realtime pise un alta/firma en curso. */
   private suppressRealtimeUntil = 0;
 
+  private realtimeReady = false;
+
   constructor() {
-    this.init();
+    // No fetch aquí: RLS exige sesión. App llama reloadFromServer() tras login.
+    void this.initRealtimeOnly();
   }
 
   // ── Initialization ──────────────────────────────────────────────────────────
 
-  private async init() {
-    await this.fetchAll();
+  private async initRealtimeOnly() {
+    if (this.realtimeReady) return;
     this.subscribeRealtime();
+    this.realtimeReady = true;
+  }
+
+  /**
+   * Recarga pacientes, consentimientos y plantillas con la sesión actual.
+   * Hay que llamarlo tras login (el constructor no tiene auth todavía).
+   */
+  public async reloadFromServer() {
+    this.templatesSeedAttempted = false;
+    await this.fetchAll();
+    await this.initRealtimeOnly();
     this.notify();
   }
 
@@ -236,9 +266,9 @@ class SupabaseService {
 
     let { data, error } = await runQuery(this.consentsSelectColumns);
 
-    // BD sin columna signature_path todavía
-    if (error && this.consentsSelectColumns.includes('signature_path')) {
-      console.warn('signature_path no disponible; usando columnas legacy. Ejecuta la migración SQL.');
+    // BD sin columnas nuevas (signature_path / administration_*) → legacy
+    if (error && this.consentsSelectColumns !== CONSENT_LIST_COLUMNS_LEGACY) {
+      console.warn('Columnas nuevas no disponibles; usando select legacy. Ejecuta la migración SQL.');
       this.consentsSelectColumns = CONSENT_LIST_COLUMNS_LEGACY;
       ({ data, error } = await runQuery(CONSENT_LIST_COLUMNS_LEGACY));
     }
@@ -330,6 +360,25 @@ class SupabaseService {
     }
   }
 
+  /** Inserta plantillas de ejemplo si la tabla está vacía. */
+  public async ensureDefaultTemplates(): Promise<ConsentTemplate[]> {
+    const { data, error } = await supabase
+      .from('consent_templates')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (!error && data && data.length > 0) {
+      this.templates = (data as unknown as Record<string, unknown>[]).map(mapTemplate);
+      this.notify();
+      return this.getTemplates();
+    }
+
+    this.templatesSeedAttempted = false;
+    await this.seedDefaultTemplates();
+    this.notify();
+    return this.getTemplates();
+  }
+
   private async seedDefaultTemplates() {
     const rows = initialTemplates.map((t) => ({
       name: t.name,
@@ -339,9 +388,37 @@ class SupabaseService {
       active: true,
     }));
 
-    const { error } = await supabase.from('consent_templates').insert(rows);
+    const { data: inserted, error } = await supabase
+      .from('consent_templates')
+      .insert(rows)
+      .select('*');
+
     if (error) {
       console.error('Error seeding templates:', error);
+      // Reintento uno a uno por si el batch falla
+      const created: ConsentTemplate[] = [];
+      for (const row of rows) {
+        const { data: one, error: oneErr } = await supabase
+          .from('consent_templates')
+          .insert(row)
+          .select('*')
+          .single();
+        if (oneErr) {
+          console.error('Error seeding template', row.name, oneErr);
+          continue;
+        }
+        if (one) created.push(mapTemplate(one as Record<string, unknown>));
+      }
+      if (created.length > 0) {
+        this.templates = created.sort((a, b) =>
+          a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
+        );
+      }
+      return;
+    }
+
+    if (inserted && inserted.length > 0) {
+      this.templates = (inserted as unknown as Record<string, unknown>[]).map(mapTemplate);
       return;
     }
 
@@ -416,6 +493,9 @@ class SupabaseService {
     if (updates.medicalLicense !== undefined) dbUpdates.medical_license = updates.medicalLicense;
     if (updates.email !== undefined) dbUpdates.email = updates.email;
     if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
+    if (updates.doctorSignaturePath !== undefined) {
+      dbUpdates.doctor_signature_path = updates.doctorSignaturePath;
+    }
 
     if (Object.keys(dbUpdates).length > 0) {
       supabase
@@ -423,9 +503,30 @@ class SupabaseService {
         .update(dbUpdates)
         .eq('id', 1)
         .then(({ error }) => {
-          if (error) console.error('Error updating clinic_settings:', error);
+          if (error) {
+            // Columna doctor_signature_path aún no migrada
+            if (updates.doctorSignaturePath && 'doctor_signature_path' in dbUpdates) {
+              const { doctor_signature_path: _, ...rest } = dbUpdates;
+              if (Object.keys(rest).length > 0) {
+                void supabase.from('clinic_settings').update(rest).eq('id', 1);
+              }
+              console.warn(
+                'doctor_signature_path no disponible. Ejecuta la migración SQL de firma doctora.'
+              );
+            } else {
+              console.error('Error updating clinic_settings:', error);
+            }
+          }
         });
     }
+  }
+
+  /** Sube imagen de firma de la doctora y la guarda en clinic_settings. */
+  public async setDoctorSignatureFromDataUrl(dataUrl: string): Promise<string | null> {
+    const path = await uploadDoctorSignature(dataUrl);
+    if (!path) return null;
+    this.updateClinicSettings({ doctorSignaturePath: path });
+    return path;
   }
 
   // ── Patients ──────────────────────────────────────────────────────────────────
@@ -819,6 +920,158 @@ class SupabaseService {
     });
 
     return updated;
+  }
+
+  /**
+   * Una sola firma del paciente aplicada a varios consentimientos pendientes
+   * de la misma sesión (misma firma, un PDF por documento).
+   */
+  public signConsentsBatch(ids: string[], signatureData: string): Consent[] {
+    const unique = [...new Set(ids.filter((id) => id && !id.startsWith('temp-')))];
+    const signed: Consent[] = [];
+    for (const id of unique) {
+      const result = this.signConsent(id, signatureData);
+      if (result) signed.push(result);
+    }
+    if (signed.length > 1) {
+      this.addActivityLogInternal({
+        action: `Firma en lote: ${signed.length} consentimientos — ${signed[0].patientNameSnapshot}`,
+        patientId: signed[0].patientId,
+      });
+    }
+    return signed;
+  }
+
+  public async updateConsentAdministration(
+    id: string,
+    fields: { administrationNumber?: string; administrationDate?: string }
+  ): Promise<Consent | undefined> {
+    const existing = this.consents.find((c) => c.id === id);
+    if (!existing) return undefined;
+
+    const updated: Consent = {
+      ...existing,
+      administrationNumber:
+        fields.administrationNumber !== undefined
+          ? fields.administrationNumber || undefined
+          : existing.administrationNumber,
+      administrationDate:
+        fields.administrationDate !== undefined
+          ? fields.administrationDate || undefined
+          : existing.administrationDate,
+      updatedAt: new Date().toISOString(),
+    };
+    this.consents = this.consents.map((c) => (c.id === id ? updated : c));
+    this.notify();
+
+    const dbUpdate: Record<string, unknown> = {
+      updated_at: updated.updatedAt,
+    };
+    if (fields.administrationNumber !== undefined) {
+      dbUpdate.administration_number = fields.administrationNumber || null;
+    }
+    if (fields.administrationDate !== undefined) {
+      dbUpdate.administration_date = fields.administrationDate || null;
+    }
+
+    const { error } = await supabase.from('consents').update(dbUpdate).eq('id', id);
+    if (error) {
+      console.warn('No se pudieron guardar campos de administración (¿migración SQL?):', error.message);
+    }
+    return updated;
+  }
+
+  // ── Patient notes ─────────────────────────────────────────────────────────────
+
+  public getPatientNotes(patientId: string): PatientNote[] {
+    return this.patientNotes
+      .filter((n) => n.patientId === patientId)
+      .sort((a, b) => {
+        const d = b.noteDate.localeCompare(a.noteDate);
+        if (d !== 0) return d;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+  }
+
+  public async fetchPatientNotes(patientId: string): Promise<PatientNote[]> {
+    if (!isUuid(patientId)) return [];
+    const { data, error } = await supabase
+      .from('patient_notes')
+      .select('*')
+      .eq('patient_id', patientId)
+      .order('note_date', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('Error fetching patient_notes (¿migración SQL?):', error.message);
+      return this.getPatientNotes(patientId);
+    }
+
+    const mapped = ((data || []) as unknown as Record<string, unknown>[]).map(mapPatientNote);
+    this.patientNotes = [
+      ...this.patientNotes.filter((n) => n.patientId !== patientId),
+      ...mapped,
+    ];
+    this.notify();
+    return mapped;
+  }
+
+  public async addPatientNote(
+    patientId: string,
+    body: string,
+    noteDate?: string
+  ): Promise<PatientNote> {
+    if (!isUuid(patientId)) throw new Error('Paciente no válido');
+    const trimmed = body.trim();
+    if (!trimmed) throw new Error('La nota no puede estar vacía');
+
+    const date = noteDate || new Date().toISOString().slice(0, 10);
+    const optimistic: PatientNote = {
+      id: `temp-note-${Date.now()}`,
+      patientId,
+      noteDate: date,
+      body: trimmed,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.patientNotes = [optimistic, ...this.patientNotes];
+    this.notify();
+
+    const { data, error } = await supabase
+      .from('patient_notes')
+      .insert({
+        patient_id: patientId,
+        note_date: date,
+        body: trimmed,
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      this.patientNotes = this.patientNotes.filter((n) => n.id !== optimistic.id);
+      this.notify();
+      throw error || new Error('No se pudo guardar la nota. Ejecuta la migración SQL.');
+    }
+
+    const persisted = mapPatientNote(data as Record<string, unknown>);
+    this.patientNotes = this.patientNotes.map((n) =>
+      n.id === optimistic.id ? persisted : n
+    );
+    this.notify();
+    return persisted;
+  }
+
+  public async deletePatientNote(noteId: string): Promise<void> {
+    const prev = this.patientNotes;
+    this.patientNotes = this.patientNotes.filter((n) => n.id !== noteId);
+    this.notify();
+    if (noteId.startsWith('temp-')) return;
+    const { error } = await supabase.from('patient_notes').delete().eq('id', noteId);
+    if (error) {
+      console.error('Error deleting note:', error);
+      this.patientNotes = prev;
+      this.notify();
+    }
   }
 
   // ── Consent Templates ─────────────────────────────────────────────────────────

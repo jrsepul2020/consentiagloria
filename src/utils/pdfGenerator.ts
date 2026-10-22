@@ -33,6 +33,13 @@ export async function buildConsentJsPdf(
     signatureImage = (await fetchSignatureAsDataUrl(consent.signaturePath)) || undefined;
   }
 
+  let doctorSignatureImage: string | undefined;
+  if (clinicSettings.doctorSignaturePath) {
+    doctorSignatureImage =
+      (await fetchSignatureAsDataUrl(clinicSettings.doctorSignaturePath, 'clinic-assets')) ||
+      undefined;
+  }
+
   const renderPageHeader = (isFirstPage: boolean) => {
     if (isFirstPage) {
       doc.setFont('helvetica', 'bold');
@@ -96,6 +103,30 @@ export async function buildConsentJsPdf(
       doc.text(`DNI / NIF: ${consent.patientDniSnapshot}`, margin + 4, y + 16);
 
       y += 26;
+
+      if (consent.administrationNumber || consent.administrationDate) {
+        doc.setFillColor(255, 248, 240);
+        doc.roundedRect(margin, y, contentWidth, 16, 3, 3, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(40, 40, 40);
+        doc.text('CONTROL NEUROMODULADORES', margin + 4, y + 5);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(60, 60, 60);
+        const adminLine = [
+          consent.administrationNumber
+            ? `Nº administración: ${consent.administrationNumber}`
+            : null,
+          consent.administrationDate
+            ? `Fecha: ${consent.administrationDate}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join('  |  ');
+        doc.text(adminLine, margin + 4, y + 11);
+        y += 20;
+      }
     } else {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9);
@@ -144,7 +175,7 @@ export async function buildConsentJsPdf(
   }
 
   y += 6;
-  const signatureBlockHeight = 38;
+  const signatureBlockHeight = doctorSignatureImage ? 72 : 38;
 
   if (y + signatureBlockHeight > pageBottomLimit) {
     renderPageFooter(doc, shortId, pageWidth);
@@ -163,10 +194,17 @@ export async function buildConsentJsPdf(
     y += 10;
   }
 
+  const colWidth = (contentWidth - 8) / 2;
+  const leftX = margin;
+  const rightX = margin + colWidth + 8;
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(30, 30, 30);
-  doc.text('FIRMA DEL PACIENTE', margin, y);
+  doc.text('FIRMA DEL PACIENTE', leftX, y);
+  if (doctorSignatureImage) {
+    doc.text('FIRMA DE LA PROFESIONAL', rightX, y);
+  }
 
   y += 4.5;
   doc.setFont('helvetica', 'normal');
@@ -187,23 +225,40 @@ export async function buildConsentJsPdf(
         hour: '2-digit',
         minute: '2-digit',
       });
-  doc.text(`Firma registrada el: ${dateStr}`, margin, y);
+  doc.text(`Firma registrada el: ${dateStr}`, leftX, y);
 
   y += 5;
+  const sigY = y;
 
   if (signatureImage && signatureImage.startsWith('data:image')) {
     try {
-      doc.addImage(signatureImage, 'PNG', margin, y, 38, 15);
-      y += 17;
+      doc.addImage(signatureImage, 'PNG', leftX, sigY, 38, 15);
     } catch (err) {
       console.warn('Could not embed signature image in PDF:', err);
     }
   }
 
+  if (doctorSignatureImage && doctorSignatureImage.startsWith('data:image')) {
+    try {
+      doc.addImage(doctorSignatureImage, 'PNG', rightX, sigY, 38, 15);
+    } catch (err) {
+      console.warn('Could not embed doctor signature in PDF:', err);
+    }
+  }
+
+  y = sigY + 17;
+
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 100, 100);
-  doc.text(`${consent.patientNameSnapshot} — DNI ${consent.patientDniSnapshot}`, margin, y + 3);
+  doc.text(`${consent.patientNameSnapshot} — DNI ${consent.patientDniSnapshot}`, leftX, y + 3);
+  if (doctorSignatureImage) {
+    doc.text(
+      `${clinicSettings.professionalName}`,
+      rightX,
+      y + 3
+    );
+  }
 
   renderPageFooter(doc, shortId, pageWidth);
   return doc;
