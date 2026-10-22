@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase, getSession, signOut } from './lib/supabaseClient';
 import { supabaseService } from './services/supabaseService';
 import { NavTab, BottomNav } from './components/BottomNav';
@@ -103,10 +103,27 @@ export default function App() {
     [patients, selectedPatientId]
   );
 
-  const selectedConsent = useMemo(
-    () => consents.find((c) => c.id === selectedConsentId) || null,
-    [consents, selectedConsentId]
-  );
+  /** Evita que el detalle se desmonte si Realtime tarda en devolver el id recién guardado. */
+  const stickyConsentRef = useRef<Consent | null>(null);
+  const selectedConsent = useMemo(() => {
+    const found = consents.find((c) => c.id === selectedConsentId) || null;
+    if (found) {
+      stickyConsentRef.current = found;
+      return found;
+    }
+    if (
+      selectedConsentId &&
+      stickyConsentRef.current &&
+      stickyConsentRef.current.id === selectedConsentId
+    ) {
+      return stickyConsentRef.current;
+    }
+    return null;
+  }, [consents, selectedConsentId]);
+
+  useEffect(() => {
+    if (!selectedConsentId) stickyConsentRef.current = null;
+  }, [selectedConsentId]);
 
   const signedTodayCount = useMemo(() => {
     const today = new Date();
@@ -188,28 +205,33 @@ export default function App() {
     setActiveTab(tab);
   };
 
-  const handleAddClient = (patientData: {
+  const handleAddClient = async (patientData: {
     fullName: string;
     dni: string;
     phone: string;
     email: string;
   }) => {
-    const newPatient = supabaseService.addPatient(patientData);
-    triggerToast('✓ Cliente Registrado', `${newPatient.fullName} añadido al expediente.`);
+    try {
+      const newPatient = await supabaseService.addPatientAsync(patientData);
+      triggerToast('✓ Cliente Registrado', `${newPatient.fullName} añadido al expediente.`);
 
-    if (openClientFromConsent) {
-      setPreselectedPatientId(newPatient.id);
-      setOpenClientFromConsent(false);
-      setNewClientDraftName('');
-      setFormScreen('nuevo-consentimiento');
-      return;
+      if (openClientFromConsent) {
+        setPreselectedPatientId(newPatient.id);
+        setOpenClientFromConsent(false);
+        setNewClientDraftName('');
+        setFormScreen('nuevo-consentimiento');
+        return;
+      }
+
+      setSelectedPatientId(newPatient.id);
+      setFormScreen('ficha-cliente');
+    } catch (err) {
+      console.error(err);
+      triggerToast('Error', 'No se pudo guardar el cliente. Inténtalo de nuevo.');
     }
-
-    setSelectedPatientId(newPatient.id);
-    setFormScreen('ficha-cliente');
   };
 
-  const handleCreateConsent = (consentData: {
+  const handleCreateConsent = async (consentData: {
     patientId: string;
     patientNameSnapshot: string;
     patientDniSnapshot: string;
@@ -219,22 +241,35 @@ export default function App() {
     templateVersion: number;
     contentSnapshot: string;
   }) => {
-    const newConsent = supabaseService.createConsent(consentData);
-    triggerToast(
-      '⚡ Consentimiento Creado',
-      `Enviado a ${newConsent.patientNameSnapshot} para firma.`
-    );
-    setSelectedConsentId(newConsent.id);
-    setFormScreen('detalle-consentimiento');
+    try {
+      const newConsent = await supabaseService.createConsentAsync(consentData);
+      triggerToast(
+        '⚡ Consentimiento Creado',
+        `Enviado a ${newConsent.patientNameSnapshot} para firma.`
+      );
+      setSelectedConsentId(newConsent.id);
+      setFormScreen('detalle-consentimiento');
+    } catch (err) {
+      console.error(err);
+      const message =
+        err instanceof Error ? err.message : 'No se pudo crear el consentimiento.';
+      triggerToast('Error', message);
+    }
   };
 
   const handleSignComplete = (consentId: string, signatureData: string) => {
+    if (consentId.startsWith('temp-')) {
+      triggerToast('Error', 'El consentimiento aún se está guardando. Espera un segundo.');
+      return;
+    }
     const signed = supabaseService.signConsent(consentId, signatureData);
     if (signed) {
       triggerToast(
         '🎉 ¡Firma Confirmada!',
         `${signed.patientNameSnapshot} firmó "${signed.title}".`
       );
+    } else {
+      triggerToast('Error', 'No se pudo firmar. Vuelve a abrir el documento.');
     }
   };
 

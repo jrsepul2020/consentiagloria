@@ -9,7 +9,7 @@ interface NewClientViewProps {
     dni: string;
     phone: string;
     email: string;
-  }) => void;
+  }) => void | Promise<void>;
 }
 
 export const NewClientView: React.FC<NewClientViewProps> = ({
@@ -21,6 +21,7 @@ export const NewClientView: React.FC<NewClientViewProps> = ({
   const [dni, setDni] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setFullName(initialFullName.trim());
@@ -29,10 +30,15 @@ export const NewClientView: React.FC<NewClientViewProps> = ({
     setEmail('');
   }, [initialFullName]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fullName.trim() || !dni.trim()) return;
-    onAddClient({ fullName: fullName.trim(), dni: dni.trim(), phone, email });
+    if (!fullName.trim() || !dni.trim() || saving) return;
+    setSaving(true);
+    try {
+      await onAddClient({ fullName: fullName.trim(), dni: dni.trim(), phone, email });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const fieldClass =
@@ -121,10 +127,11 @@ export const NewClientView: React.FC<NewClientViewProps> = ({
         <div className="pt-2 space-y-3">
           <button
             type="submit"
-            className="w-full min-h-[3.5rem] py-4 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] text-white font-extrabold text-base flex items-center justify-center gap-2"
+            disabled={saving}
+            className="w-full min-h-[3.5rem] py-4 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] disabled:opacity-50 text-white font-extrabold text-base flex items-center justify-center gap-2"
           >
             <Check className="w-5 h-5" />
-            Guardar cliente
+            {saving ? 'Guardando…' : 'Guardar cliente'}
           </button>
           <button
             type="button"

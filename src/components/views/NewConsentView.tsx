@@ -24,7 +24,7 @@ interface NewConsentViewProps {
     category: string;
     templateVersion: number;
     contentSnapshot: string;
-  }) => void;
+  }) => void | Promise<void>;
 }
 
 type Step = 1 | 2 | 3;
@@ -45,6 +45,7 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [documentTitle, setDocumentTitle] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const sortedPatients = useMemo(
     () => [...patients].sort((a, b) => compareBySurnameThenName(a.fullName, b.fullName)),
@@ -122,26 +123,35 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
   }, [selectedTemplate, documentTitle]);
 
   const canNext =
-    (step === 1 && !!selectedPatient) ||
-    (step === 2 && !!selectedTemplate) ||
-    step === 3;
+    !saving &&
+    ((step === 1 && !!selectedPatient && !selectedPatient.id.startsWith('temp-')) ||
+      (step === 2 && !!selectedTemplate) ||
+      step === 3);
 
-  const goNext = () => {
-    if (step === 1 && selectedPatient) setStep(2);
-    else if (step === 2 && selectedTemplate) {
+  const goNext = async () => {
+    if (step === 1 && selectedPatient) {
+      if (selectedPatient.id.startsWith('temp-')) return;
+      setStep(2);
+    } else if (step === 2 && selectedTemplate) {
       setDocumentTitle(selectedTemplate.name);
       setStep(3);
     } else if (step === 3 && selectedPatient && selectedTemplate) {
-      onCreateConsent({
-        patientId: selectedPatient.id,
-        patientNameSnapshot: selectedPatient.fullName,
-        patientDniSnapshot: selectedPatient.dni,
-        templateId: selectedTemplate.id,
-        title: documentTitle.trim() || selectedTemplate.name,
-        category: selectedTemplate.category,
-        templateVersion: selectedTemplate.version,
-        contentSnapshot: selectedTemplate.content,
-      });
+      if (selectedPatient.id.startsWith('temp-')) return;
+      setSaving(true);
+      try {
+        await onCreateConsent({
+          patientId: selectedPatient.id,
+          patientNameSnapshot: selectedPatient.fullName,
+          patientDniSnapshot: selectedPatient.dni,
+          templateId: selectedTemplate.id,
+          title: documentTitle.trim() || selectedTemplate.name,
+          category: selectedTemplate.category,
+          templateVersion: selectedTemplate.version,
+          contentSnapshot: selectedTemplate.content,
+        });
+      } finally {
+        setSaving(false);
+      }
     }
   };
 
@@ -396,11 +406,11 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
           <button
             type="button"
             disabled={!canNext}
-            onClick={goNext}
+            onClick={() => void goNext()}
             className="flex-[1.4] py-3.5 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] disabled:opacity-40 text-white font-extrabold text-sm flex items-center justify-center gap-1.5"
           >
-            {step === 3 ? 'Crear y enviar' : 'Siguiente'}
-            {step < 3 && <ChevronRight className="w-4 h-4" />}
+            {saving ? 'Guardando…' : step === 3 ? 'Crear y enviar' : 'Siguiente'}
+            {!saving && step < 3 && <ChevronRight className="w-4 h-4" />}
           </button>
         </div>
       </div>

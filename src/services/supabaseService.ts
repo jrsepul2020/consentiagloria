@@ -19,9 +19,12 @@ import { uploadConsentSignature } from '../lib/consentStorage';
 export const PAGE_SIZE_PATIENTS = 40;
 export const PAGE_SIZE_CONSENTS = 30;
 
-/** Columnas de consentimiento sin signature_data (evita traer base64 pesado). */
+/** Columnas sin signature_data (evita traer base64). signature_path es opcional en BD antigua. */
 const CONSENT_LIST_COLUMNS =
   'id, patient_id, template_id, patient_name_snapshot, patient_dni_snapshot, title, category, template_version, content_snapshot, status, signature_path, signed_at, pdf_path, created_at, updated_at';
+
+const CONSENT_LIST_COLUMNS_LEGACY =
+  'id, patient_id, template_id, patient_name_snapshot, patient_dni_snapshot, title, category, template_version, content_snapshot, status, signed_at, pdf_path, created_at, updated_at';
 
 // ── Mapping helpers: DB snake_case → App camelCase ────────────────────────────
 
@@ -120,6 +123,12 @@ class SupabaseService {
   private pendingCountCache = 0;
   private signedCountCache = 0;
   private totalConsentsCache = 0;
+  private consentsSelectColumns = CONSENT_LIST_COLUMNS;
+  private realtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  /** IDs tocados localmente: no deben desaparecer en un refresh Realtime. */
+  private pinnedConsentIds = new Set<string>();
+  /** Evita que Realtime pise un alta/firma en curso. */
+  private suppressRealtimeUntil = 0;
 
   constructor() {
     this.init();
@@ -194,29 +203,74 @@ class SupabaseService {
     }
     if (!this.consentsHasMore && !reset) return;
 
-    let query = supabase
-      .from('consents')
-      .select(CONSENT_LIST_COLUMNS)
-      .order('created_at', { ascending: false })
-      .range(this.consentsOffset, this.consentsOffset + PAGE_SIZE_CONSENTS - 1);
+    const runQuery = (columns: string) => {
+      let query = supabase
+        .from('consents')
+        .select(columns)
+        .order('created_at', { ascending: false })
+        .range(this.consentsOffset, this.consentsOffset + PAGE_SIZE_CONSENTS - 1);
 
-    const term = this.consentsQuery.trim();
-    if (term) {
-      query = query.or(
-        `title.ilike.%${term}%,patient_name_snapshot.ilike.%${term}%,category.ilike.%${term}%`
-      );
+      const term = this.consentsQuery.trim();
+      if (term) {
+        query = query.or(
+          `title.ilike.%${term}%,patient_name_snapshot.ilike.%${term}%,category.ilike.%${term}%`
+        );
+      }
+      return query;
+    };
+
+    let { data, error } = await runQuery(this.consentsSelectColumns);
+
+    // BD sin columna signature_path todavía
+    if (error && this.consentsSelectColumns.includes('signature_path')) {
+      console.warn('signature_path no disponible; usando columnas legacy. Ejecuta la migración SQL.');
+      this.consentsSelectColumns = CONSENT_LIST_COLUMNS_LEGACY;
+      ({ data, error } = await runQuery(CONSENT_LIST_COLUMNS_LEGACY));
     }
 
-    const { data, error } = await query;
     if (error) {
       console.error('Error fetching consents:', error);
+      // No vaciar la lista en error: evita “se graba y desaparece”
       return;
     }
 
-    const mapped = ((data || []) as Record<string, unknown>[]).map(mapConsent);
-    this.consents = reset ? mapped : [...this.consents, ...mapped];
+    const mapped = ((data || []) as unknown as Record<string, unknown>[]).map(mapConsent);
+
+    if (reset) {
+      const byId = new Map(mapped.map((c) => [c.id, c]));
+      // Conservar consentimientos locales pinneados (alta/firma reciente) si el fetch aún no los trae
+      for (const local of this.consents) {
+        if (local.id.startsWith('temp-')) continue;
+        if (this.pinnedConsentIds.has(local.id) && !byId.has(local.id)) {
+          byId.set(local.id, local);
+        }
+      }
+      this.consents = Array.from(byId.values()).sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    } else {
+      const existing = new Set(this.consents.map((c) => c.id));
+      this.consents = [...this.consents, ...mapped.filter((c) => !existing.has(c.id))];
+    }
     this.consentsOffset += mapped.length;
     this.consentsHasMore = mapped.length === PAGE_SIZE_CONSENTS;
+  }
+
+  private pinConsent(id: string) {
+    if (!id || id.startsWith('temp-')) return;
+    this.pinnedConsentIds.add(id);
+    this.suppressRealtimeUntil = Date.now() + 2500;
+    setTimeout(() => this.pinnedConsentIds.delete(id), 15000);
+  }
+
+  private scheduleConsentsRefresh() {
+    if (Date.now() < this.suppressRealtimeUntil) return;
+    if (this.realtimeRefreshTimer) clearTimeout(this.realtimeRefreshTimer);
+    this.realtimeRefreshTimer = setTimeout(async () => {
+      if (Date.now() < this.suppressRealtimeUntil) return;
+      await Promise.all([this.fetchConsentsPage(true), this.refreshConsentCounts()]);
+      this.notify();
+    }, 600);
   }
 
   private async refreshConsentCounts() {
@@ -266,9 +320,8 @@ class SupabaseService {
         await this.fetchPatientsPage(true);
         this.notify();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'consents' }, async () => {
-        await Promise.all([this.fetchConsentsPage(true), this.refreshConsentCounts()]);
-        this.notify();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'consents' }, () => {
+        this.scheduleConsentsRefresh();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_logs' }, async () => {
         await this.fetchActivities();
@@ -346,12 +399,13 @@ class SupabaseService {
     return this.patients.find((p) => p.id === id);
   }
 
-  public addPatient(patientData: {
+  /** Alta de paciente esperando el UUID real de Supabase (evita FKs con temp-). */
+  public async addPatientAsync(patientData: {
     fullName: string;
     dni: string;
     phone: string;
     email: string;
-  }): Patient {
+  }): Promise<Patient> {
     const optimistic: Patient = {
       ...patientData,
       id: `temp-${Date.now()}`,
@@ -362,7 +416,7 @@ class SupabaseService {
     this.patients = [optimistic, ...this.patients];
     this.notify();
 
-    supabase
+    const { data, error } = await supabase
       .from('patients')
       .insert({
         full_name: patientData.fullName,
@@ -370,32 +424,51 @@ class SupabaseService {
         phone: patientData.phone,
         email: patientData.email,
       })
-      .select()
-      .single()
-      .then(({ data, error }) => {
-        if (error) {
-          console.error('Error inserting patient:', error);
-          return;
-        }
-        if (data) {
-          const persisted = mapPatient(data as Record<string, unknown>);
-          this.patients = this.patients.map((p) =>
-            p.id === optimistic.id ? persisted : p
-          );
-          this.notify();
-          this.addInMemoryNotification({
-            title: 'Nuevo Cliente Registrado',
-            body: `${persisted.fullName} ha sido registrado/a en el sistema.`,
-            type: 'new_client',
-            relatedId: persisted.id,
-          });
-          this.addActivityLogInternal({
-            action: `Nuevo paciente registrado: ${persisted.fullName}`,
-          });
-        }
-      });
+      .select('id, full_name, dni, phone, email, created_at, updated_at')
+      .single();
 
-    return optimistic;
+    if (error || !data) {
+      console.error('Error inserting patient:', error);
+      this.patients = this.patients.filter((p) => p.id !== optimistic.id);
+      this.notify();
+      throw error || new Error('No se pudo registrar el cliente');
+    }
+
+    const persisted = mapPatient(data as Record<string, unknown>);
+    this.patients = this.patients.map((p) => (p.id === optimistic.id ? persisted : p));
+    this.notify();
+    this.addInMemoryNotification({
+      title: 'Nuevo Cliente Registrado',
+      body: `${persisted.fullName} ha sido registrado/a en el sistema.`,
+      type: 'new_client',
+      relatedId: persisted.id,
+    });
+    this.addActivityLogInternal({
+      action: `Nuevo paciente registrado: ${persisted.fullName}`,
+    });
+    return persisted;
+  }
+
+  /** @deprecated Prefer addPatientAsync — espera el UUID real. */
+  public addPatient(patientData: {
+    fullName: string;
+    dni: string;
+    phone: string;
+    email: string;
+  }): Patient {
+    // No duplicar: addPatientAsync ya inserta en lista
+    let synced: Patient | null = null;
+    void this.addPatientAsync(patientData).then((p) => {
+      synced = p;
+    });
+    return (
+      synced || {
+        ...patientData,
+        id: `temp-pending-${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+    );
   }
 
   // ── Consents ──────────────────────────────────────────────────────────────────
@@ -431,7 +504,11 @@ class SupabaseService {
     return this.signedCountCache || this.consents.filter((c) => c.status === 'FIRMADO').length;
   }
 
-  public createConsent(data: {
+  /**
+   * Crea el consentimiento y espera el UUID real.
+   * Evita abrir el detalle con id temp- que luego “desaparece”.
+   */
+  public async createConsentAsync(data: {
     patientId: string;
     patientNameSnapshot: string;
     patientDniSnapshot: string;
@@ -440,7 +517,14 @@ class SupabaseService {
     category: string;
     templateVersion: number;
     contentSnapshot: string;
-  }): Consent {
+  }): Promise<Consent> {
+    if (!data.patientId || data.patientId.startsWith('temp-')) {
+      throw new Error('El cliente aún no está guardado. Espera un momento e inténtalo de nuevo.');
+    }
+    if (!data.templateId || data.templateId.startsWith('temp-')) {
+      throw new Error('La plantilla no es válida.');
+    }
+
     const optimistic: Consent = {
       ...data,
       id: `temp-${Date.now()}`,
@@ -452,9 +536,47 @@ class SupabaseService {
     this.consents = [optimistic, ...this.consents];
     this.notify();
 
-    supabase
+    const payload = {
+      patient_id: data.patientId,
+      template_id: data.templateId,
+      patient_name_snapshot: data.patientNameSnapshot,
+      patient_dni_snapshot: data.patientDniSnapshot,
+      title: data.title,
+      category: data.category,
+      template_version: data.templateVersion,
+      content_snapshot: data.contentSnapshot,
+      status: 'PENDIENTE',
+    };
+
+    // INSERT mínimo (solo id). Luego leemos la fila completa — evita borrar el
+    // optimista si el SELECT amplio falla tras un INSERT ya confirmado.
+    const { data: inserted, error: insertError } = await supabase
       .from('consents')
-      .insert({
+      .insert(payload)
+      .select('id')
+      .single();
+
+    if (insertError || !inserted?.id) {
+      console.error('Error inserting consent:', insertError);
+      this.consents = this.consents.filter((c) => c.id !== optimistic.id);
+      this.notify();
+      throw insertError || new Error('No se pudo crear el consentimiento');
+    }
+
+    const realId = inserted.id as string;
+    this.pinConsent(realId);
+
+    let row: Record<string, unknown> | null = null;
+    let { data: full, error: selectError } = await supabase
+      .from('consents')
+      .select(CONSENT_LIST_COLUMNS_LEGACY)
+      .eq('id', realId)
+      .single();
+
+    if (selectError || !full) {
+      console.warn('Select post-insert falló; usando datos locales + id real:', selectError);
+      row = {
+        id: realId,
         patient_id: data.patientId,
         template_id: data.templateId,
         patient_name_snapshot: data.patientNameSnapshot,
@@ -464,40 +586,69 @@ class SupabaseService {
         template_version: data.templateVersion,
         content_snapshot: data.contentSnapshot,
         status: 'PENDIENTE',
-      })
-      .select()
-      .single()
-      .then(({ data: row, error }) => {
-        if (error) { console.error('Error inserting consent:', error); return; }
-        if (row) {
-          const persisted = mapConsent(row as Record<string, unknown>);
-          this.consents = this.consents.map((c) =>
-            c.id === optimistic.id ? persisted : c
-          );
-          this.addInMemoryNotification({
-            title: 'Nuevo Consentimiento Creado',
-            body: `Consentimiento "${persisted.title}" generado para ${persisted.patientNameSnapshot}.`,
-            type: 'system',
-            relatedId: persisted.id,
-          });
-          this.addActivityLogInternal({
-            action: `Consentimiento creado: ${persisted.title} — ${persisted.patientNameSnapshot}`,
-            consentId: persisted.id,
-            patientId: persisted.patientId,
-          });
-          this.notify();
-        }
-      });
+        created_at: optimistic.createdAt,
+        updated_at: optimistic.updatedAt,
+      };
+    } else {
+      row = full as Record<string, unknown>;
+    }
 
-    return optimistic;
+    const persisted = mapConsent(row);
+    this.consents = this.consents
+      .filter((c) => c.id !== optimistic.id && c.id !== persisted.id)
+      .concat(persisted)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    this.notify();
+
+    this.addInMemoryNotification({
+      title: 'Nuevo Consentimiento Creado',
+      body: `Consentimiento "${persisted.title}" generado para ${persisted.patientNameSnapshot}.`,
+      type: 'system',
+      relatedId: persisted.id,
+    });
+    this.addActivityLogInternal({
+      action: `Consentimiento creado: ${persisted.title} — ${persisted.patientNameSnapshot}`,
+      consentId: persisted.id,
+      patientId: persisted.patientId,
+    });
+    await this.refreshConsentCounts();
+    this.notify();
+
+    return persisted;
+  }
+
+  public createConsent(data: {
+    patientId: string;
+    patientNameSnapshot: string;
+    patientDniSnapshot: string;
+    templateId: string;
+    title: string;
+    category: string;
+    templateVersion: number;
+    contentSnapshot: string;
+  }): Consent {
+    void this.createConsentAsync(data).catch((err) => console.error(err));
+    return {
+      ...data,
+      id: `temp-pending-${Date.now()}`,
+      status: 'PENDIENTE',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   public signConsent(id: string, signatureData: string): Consent | undefined {
+    if (id.startsWith('temp-')) {
+      console.error('No se puede firmar un consentimiento que aún no está guardado.');
+      return undefined;
+    }
+
     const consent = this.consents.find((c) => c.id === id);
     if (!consent) return undefined;
 
+    this.pinConsent(id);
+
     const signedAt = new Date().toISOString();
-    // Firma en memoria solo para generar el PDF de esta sesión; no se persiste en BD
     const updated: Consent = {
       ...consent,
       status: 'FIRMADO',
@@ -509,28 +660,60 @@ class SupabaseService {
     this.notify();
 
     void (async () => {
-      const signaturePath = await uploadConsentSignature(id, signatureData);
+      let signaturePath: string | null = null;
+      try {
+        signaturePath = await uploadConsentSignature(id, signatureData);
+      } catch (err) {
+        console.warn('Upload firma falló; se guarda el estado FIRMADO igual:', err);
+      }
 
-      const dbUpdate: Record<string, unknown> = {
-        status: 'FIRMADO',
-        signed_at: signedAt,
-        signature_data: null, // no guardar base64 en la tabla
-      };
-      if (signaturePath) dbUpdate.signature_path = signaturePath;
+      // Intentar update completo; degradar columnas si la BD aún no las tiene
+      const attempts: Record<string, unknown>[] = [
+        {
+          status: 'FIRMADO',
+          signed_at: signedAt,
+          ...(signaturePath ? { signature_path: signaturePath } : {}),
+          signature_data: null,
+        },
+        {
+          status: 'FIRMADO',
+          signed_at: signedAt,
+          ...(signaturePath ? { signature_path: signaturePath } : {}),
+        },
+        { status: 'FIRMADO', signed_at: signedAt, signature_data: null },
+        { status: 'FIRMADO', signed_at: signedAt },
+      ];
 
-      const { error } = await supabase.from('consents').update(dbUpdate).eq('id', id);
-      if (error) console.error('Error signing consent:', error);
+      let saved = false;
+      for (const dbUpdate of attempts) {
+        const { error } = await supabase.from('consents').update(dbUpdate).eq('id', id);
+        if (!error) {
+          saved = true;
+          if (!('signature_path' in dbUpdate) && signaturePath) {
+            console.warn('Firmado sin signature_path. Ejecuta la migración SQL en Supabase.');
+          }
+          break;
+        }
+      }
+
+      if (!saved) {
+        console.error('Error signing consent: todos los intentos de UPDATE fallaron');
+        // Mantener FIRMADO en UI (ya pinneado); no borrar el documento
+        return;
+      }
 
       const forPdf: Consent = {
         ...updated,
         signaturePath: signaturePath || undefined,
-        signatureData, // data URL local para embeber en PDF ahora
+        signatureData,
       };
 
       const res = await generateAndUploadConsentPdf(forPdf, this.clinicSettings);
       const cleared: Consent = {
         ...forPdf,
-        signatureData: undefined, // liberar base64 de memoria
+        // Conservar data URL en memoria si no hay path en Storage (sigue visible en detalle)
+        signatureData: signaturePath ? undefined : signatureData,
+        signaturePath: signaturePath || undefined,
         pdfPath: res?.pdfPath || forPdf.pdfPath,
       };
       this.consents = this.consents.map((c) => (c.id === id ? cleared : c));
