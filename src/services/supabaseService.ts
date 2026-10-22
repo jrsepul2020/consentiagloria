@@ -7,17 +7,30 @@ import {
   PushNotification,
   ActivityLog,
 } from '../types';
-import {
-  initialPatients,
-  initialConsents,
-  initialTemplates,
-  initialClinicSettings,
-} from '../data/initialData';
+import { initialTemplates, initialClinicSettings } from '../data/initialData';
 import { generateAndUploadConsentPdf } from '../utils/pdfGenerator';
 import { uploadConsentSignature } from '../lib/consentStorage';
 
 export const PAGE_SIZE_PATIENTS = 40;
 export const PAGE_SIZE_CONSENTS = 30;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(id: string | undefined | null): id is string {
+  return !!id && UUID_RE.test(id);
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  if (!err) return fallback;
+  if (typeof err === 'string') return err;
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === 'string' && msg.trim()) return msg;
+  }
+  return fallback;
+}
 
 /** Columnas sin signature_data (evita traer base64). signature_path es opcional en BD antigua. */
 const CONSENT_LIST_COLUMNS =
@@ -106,9 +119,11 @@ type Listener = () => void;
 
 class SupabaseService {
   private clinicSettings: ClinicSettings = initialClinicSettings;
-  private patients: Patient[] = initialPatients;
-  private consents: Consent[] = initialConsents;
-  private templates: ConsentTemplate[] = initialTemplates;
+  /** Vacío hasta cargar de Supabase — evita IDs demo (tmpl-101) que rompen el INSERT. */
+  private patients: Patient[] = [];
+  private consents: Consent[] = [];
+  private templates: ConsentTemplate[] = [];
+  private templatesSeedAttempted = false;
   private notifications: PushNotification[] = [];
   private activities: ActivityLog[] = [];
   private listeners: Set<Listener> = new Set();
@@ -295,8 +310,47 @@ class SupabaseService {
       .from('consent_templates')
       .select('*')
       .order('name', { ascending: true });
-    if (!error && data && data.length > 0) {
-      this.templates = (data as Record<string, unknown>[]).map(mapTemplate);
+
+    if (error) {
+      console.error('Error fetching templates:', error);
+      this.templates = [];
+      return;
+    }
+
+    if (data && data.length > 0) {
+      this.templates = (data as unknown as Record<string, unknown>[]).map(mapTemplate);
+      return;
+    }
+
+    // Clínica sin plantillas: sembrar las de ejemplo con UUID reales
+    this.templates = [];
+    if (!this.templatesSeedAttempted) {
+      this.templatesSeedAttempted = true;
+      await this.seedDefaultTemplates();
+    }
+  }
+
+  private async seedDefaultTemplates() {
+    const rows = initialTemplates.map((t) => ({
+      name: t.name,
+      category: t.category,
+      content: t.content,
+      version: t.version,
+      active: true,
+    }));
+
+    const { error } = await supabase.from('consent_templates').insert(rows);
+    if (error) {
+      console.error('Error seeding templates:', error);
+      return;
+    }
+
+    const { data } = await supabase
+      .from('consent_templates')
+      .select('*')
+      .order('name', { ascending: true });
+    if (data && data.length > 0) {
+      this.templates = (data as unknown as Record<string, unknown>[]).map(mapTemplate);
     }
   }
 
@@ -518,11 +572,15 @@ class SupabaseService {
     templateVersion: number;
     contentSnapshot: string;
   }): Promise<Consent> {
-    if (!data.patientId || data.patientId.startsWith('temp-')) {
-      throw new Error('El cliente aún no está guardado. Espera un momento e inténtalo de nuevo.');
+    if (!isUuid(data.patientId)) {
+      throw new Error(
+        'El cliente no está guardado en la base de datos. Crea o elige un cliente real e inténtalo de nuevo.'
+      );
     }
-    if (!data.templateId || data.templateId.startsWith('temp-')) {
-      throw new Error('La plantilla no es válida.');
+    if (!isUuid(data.templateId)) {
+      throw new Error(
+        'La plantilla no es válida. Ve a Plantillas, crea una y vuelve a intentarlo.'
+      );
     }
 
     const optimistic: Consent = {
@@ -560,7 +618,19 @@ class SupabaseService {
       console.error('Error inserting consent:', insertError);
       this.consents = this.consents.filter((c) => c.id !== optimistic.id);
       this.notify();
-      throw insertError || new Error('No se pudo crear el consentimiento');
+      const msg = errorMessage(insertError, 'No se pudo crear el consentimiento');
+      // FK / RLS → mensaje más claro
+      if (/foreign key|violates/i.test(msg)) {
+        throw new Error(
+          'Cliente o plantilla no existen en la base de datos. Recarga la página y vuelve a elegirlos.'
+        );
+      }
+      if (/permission denied|row-level security|RLS/i.test(msg)) {
+        throw new Error(
+          'Sin permiso para crear consentimientos. Revisa que hayas iniciado sesión y la migración RLS en Supabase.'
+        );
+      }
+      throw new Error(msg);
     }
 
     const realId = inserted.id as string;

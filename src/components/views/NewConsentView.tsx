@@ -47,13 +47,19 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
   const [documentTitle, setDocumentTitle] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const isPersistedId = (id: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+
   const sortedPatients = useMemo(
-    () => [...patients].sort((a, b) => compareBySurnameThenName(a.fullName, b.fullName)),
+    () =>
+      [...patients]
+        .filter((p) => isPersistedId(p.id))
+        .sort((a, b) => compareBySurnameThenName(a.fullName, b.fullName)),
     [patients]
   );
 
   const latestActiveTemplates = useMemo(() => {
-    const active = templates.filter((t) => t.active);
+    const active = templates.filter((t) => t.active && isPersistedId(t.id));
     const mapByName = new Map<string, ConsentTemplate>();
     active.forEach((tmpl) => {
       const key = tmpl.name.trim().toLowerCase();
@@ -298,6 +304,13 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
                 className="w-full pl-10 pr-4 py-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
               />
             </div>
+
+            {latestActiveTemplates.length === 0 && (
+              <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800 rounded-xl px-3 py-3">
+                No hay plantillas en la base de datos. Ve a <strong>Plantillas</strong>, crea al
+                menos una y vuelve aquí.
+              </p>
+            )}
 
             <div className="flex gap-2 overflow-x-auto scrollbar-none pb-0.5">
               {categories.map((cat) => (
