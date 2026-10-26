@@ -3,9 +3,9 @@
  * Actualizar APP_VERSION y APP_UPDATED_AT en cada release / despliegue.
  * APP_UPDATED_AT: ISO local `YYYY-MM-DDTHH:mm` (incluye hora para verificar el deploy).
  */
-export const APP_VERSION = '1.2.1';
+export const APP_VERSION = '1.2.2';
 /** Fecha y hora de la última actualización (YYYY-MM-DDTHH:mm) */
-export const APP_UPDATED_AT = '2026-10-26T12:31';
+export const APP_UPDATED_AT = '2026-10-26T12:49';
 
 export function formatAppUpdatedAt(locale = 'es-ES'): string {
   const raw = APP_UPDATED_AT.trim();

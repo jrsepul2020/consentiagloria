@@ -12,6 +12,12 @@ import { initialTemplates, initialClinicSettings } from '../data/initialData';
 import { generateAndUploadConsentPdf } from '../utils/pdfGenerator';
 import { uploadConsentSignature, uploadDoctorSignature } from '../lib/consentStorage';
 import { normalizeTemplateCategory } from '../utils/consentHelpers';
+import {
+  APP_STATUS,
+  normalizeConsentStatus,
+  STATUS_DB_CANDIDATES,
+  statusValuesForFilter,
+} from '../utils/consentStatus';
 
 export const PAGE_SIZE_PATIENTS = 40;
 export const PAGE_SIZE_CONSENTS = 30;
@@ -66,7 +72,7 @@ function mapConsent(row: Record<string, unknown>): Consent {
     category: row.category as string,
     templateVersion: row.template_version as number,
     contentSnapshot: row.content_snapshot as string,
-    status: row.status as Consent['status'],
+    status: normalizeConsentStatus(row.status),
     signaturePath: (row.signature_path as string) || undefined,
     // Legacy: solo si aún existe en filas antiguas (no se solicita en listados)
     signatureData: (row.signature_data as string) || undefined,
@@ -330,11 +336,11 @@ class SupabaseService {
       supabase
         .from('consents')
         .select('id', { count: 'exact', head: true })
-        .eq('status', 'PENDIENTE'),
+        .in('status', statusValuesForFilter('PENDIENTE')),
       supabase
         .from('consents')
         .select('id', { count: 'exact', head: true })
-        .eq('status', 'FIRMADO'),
+        .in('status', statusValuesForFilter('FIRMADO')),
       supabase.from('consents').select('id', { count: 'exact', head: true }),
     ]);
     this.pendingCountCache = pending.count ?? 0;
@@ -875,39 +881,76 @@ class SupabaseService {
       category,
       template_version: data.templateVersion,
       content_snapshot: data.contentSnapshot,
-      status: 'PENDIENTE',
+      status: APP_STATUS.pending,
     };
 
-    // INSERT mínimo (solo id). Luego leemos la fila completa.
-    let { data: inserted, error: insertError } = await supabase
-      .from('consents')
-      .insert(basePayload)
-      .select('id')
-      .single();
+    let inserted: { id?: string } | null = null;
+    let insertError: { message?: string; details?: string } | null = null;
+
+    const tryInsert = async (payload: Record<string, unknown>) => {
+      const res = await supabase.from('consents').insert(payload).select('id').single();
+      inserted = res.data;
+      insertError = res.error;
+      return !res.error && !!res.data?.id;
+    };
+
+    // Probar status canónico y variantes (CHECK antiguos: pending / pendiente / …)
+    let insertedOk = false;
+    for (const status of STATUS_DB_CANDIDATES.PENDIENTE) {
+      if (await tryInsert({ ...basePayload, status })) {
+        insertedOk = true;
+        basePayload.status = status;
+        break;
+      }
+      if (
+        insertError &&
+        !/status|consents_status_check/i.test(
+          `${insertError.message || ''} ${insertError.details || ''}`
+        )
+      ) {
+        // Fallo no relacionado con status: salir del bucle de variantes
+        break;
+      }
+    }
 
     // Si falla por categoría CHECK en consents, reintentar con categoría por defecto
-    if (insertError && /category|check/i.test(insertError.message || '')) {
-      ({ data: inserted, error: insertError } = await supabase
-        .from('consents')
-        .insert({ ...basePayload, category: 'Tratamiento estético facial' })
-        .select('id')
-        .single());
+    if (
+      !insertedOk &&
+      insertError &&
+      /category/i.test(`${insertError.message || ''} ${insertError.details || ''}`)
+    ) {
+      for (const status of STATUS_DB_CANDIDATES.PENDIENTE) {
+        if (
+          await tryInsert({
+            ...basePayload,
+            category: 'Tratamiento estético facial',
+            status,
+          })
+        ) {
+          insertedOk = true;
+          basePayload.status = status;
+          basePayload.category = 'Tratamiento estético facial';
+          break;
+        }
+      }
     }
 
     // Último recurso: BD con template_id opcional y FK roto
     if (
+      !insertedOk &&
       insertError &&
-      /template_id|foreign key/i.test(insertError.message || '')
+      /template_id|foreign key/i.test(`${insertError.message || ''} ${insertError.details || ''}`)
     ) {
       const { template_id: _t, ...withoutTemplate } = basePayload;
-      ({ data: inserted, error: insertError } = await supabase
-        .from('consents')
-        .insert(withoutTemplate)
-        .select('id')
-        .single());
+      for (const status of STATUS_DB_CANDIDATES.PENDIENTE) {
+        if (await tryInsert({ ...withoutTemplate, status })) {
+          insertedOk = true;
+          break;
+        }
+      }
     }
 
-    if (insertError || !inserted?.id) {
+    if (!insertedOk || !inserted?.id) {
       console.error('Error inserting consent:', insertError);
       this.consents = this.consents.filter((c) => c.id !== optimistic.id);
       this.notify();
@@ -925,6 +968,11 @@ class SupabaseService {
       if (/null value.*template_id|template_id.*not-null|not null.*template_id/i.test(combined)) {
         throw new Error(
           'La base de datos exige una plantilla. Ejecuta en Supabase la migración 20261026_consents_template_optional.sql o crea una plantilla y reintenta.'
+        );
+      }
+      if (/status|consents_status_check/i.test(combined)) {
+        throw new Error(
+          'El estado del consentimiento no es válido en la base de datos. Ejecuta en Supabase: supabase/migrations/20261026_consents_status_check.sql'
         );
       }
       if (/template_id|foreign key/i.test(combined)) {
@@ -1044,22 +1092,25 @@ class SupabaseService {
         console.warn('Upload firma falló; se guarda el estado FIRMADO igual:', err);
       }
 
-      // Intentar update completo; degradar columnas si la BD aún no las tiene
-      const attempts: Record<string, unknown>[] = [
-        {
-          status: 'FIRMADO',
-          signed_at: signedAt,
-          ...(signaturePath ? { signature_path: signaturePath } : {}),
-          signature_data: null,
-        },
-        {
-          status: 'FIRMADO',
-          signed_at: signedAt,
-          ...(signaturePath ? { signature_path: signaturePath } : {}),
-        },
-        { status: 'FIRMADO', signed_at: signedAt, signature_data: null },
-        { status: 'FIRMADO', signed_at: signedAt },
-      ];
+      // Intentar update completo; degradar columnas y variantes de status si el CHECK es antiguo
+      const attempts: Record<string, unknown>[] = [];
+      for (const status of STATUS_DB_CANDIDATES.FIRMADO) {
+        attempts.push(
+          {
+            status,
+            signed_at: signedAt,
+            ...(signaturePath ? { signature_path: signaturePath } : {}),
+            signature_data: null,
+          },
+          {
+            status,
+            signed_at: signedAt,
+            ...(signaturePath ? { signature_path: signaturePath } : {}),
+          },
+          { status, signed_at: signedAt, signature_data: null },
+          { status, signed_at: signedAt }
+        );
+      }
 
       let saved = false;
       for (const dbUpdate of attempts) {
