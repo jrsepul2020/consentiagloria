@@ -7,6 +7,7 @@ import {
   displayNameBySurname,
 } from '../../utils/nameFormat';
 import { supabaseService } from '../../services/supabaseService';
+import { htmlToPlainText, looksLikeHtml, sanitizeHtml } from '../../utils/htmlContent';
 
 interface NewConsentViewProps {
   patients: Patient[];
@@ -444,9 +445,18 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
 
             <div className="rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-700 p-4">
               <p className="text-xs font-bold text-slate-500 uppercase mb-2">Vista previa</p>
-              <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed line-clamp-6">
-                {selectedTemplate.content}
-              </p>
+              {looksLikeHtml(selectedTemplate.content) ? (
+                <div
+                  className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed line-clamp-6 prose-consent"
+                  dangerouslySetInnerHTML={{
+                    __html: sanitizeHtml(selectedTemplate.content),
+                  }}
+                />
+              ) : (
+                <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed line-clamp-6">
+                  {htmlToPlainText(selectedTemplate.content)}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -469,7 +479,11 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
             onClick={() => void goNext()}
             className="flex-[1.4] py-3.5 rounded-2xl bg-[#bd003c] hover:bg-[#a00033] disabled:opacity-40 text-white font-extrabold text-sm flex items-center justify-center gap-1.5"
           >
-            {saving ? 'Guardando…' : step === 3 ? 'Crear y enviar' : 'Siguiente'}
+            {saving
+              ? 'Generando…'
+              : step === 3
+                ? 'Generar Consentimiento'
+                : 'Siguiente'}
             {!saving && step < 3 && <ChevronRight className="w-4 h-4" />}
           </button>
         </div>

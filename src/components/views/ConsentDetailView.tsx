@@ -6,6 +6,7 @@ import { openOrDownloadConsentPdf } from '../../utils/pdfGenerator';
 import { supabaseService } from '../../services/supabaseService';
 import { getStorageSignedUrl } from '../../lib/consentStorage';
 import { isNeuromodulatorConsent } from '../../utils/consentHelpers';
+import { looksLikeHtml, sanitizeHtml } from '../../utils/htmlContent';
 
 interface ConsentDetailViewProps {
   document: Consent;
@@ -251,10 +252,19 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
       </div>
 
       {tab === 'preview' && (
-        <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 space-y-3">
-          <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-            {document.contentSnapshot}
-          </p>
+        <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
+          {looksLikeHtml(document.contentSnapshot || '') ? (
+            <div
+              className="prose-consent text-sm text-slate-700 dark:text-slate-300 leading-relaxed"
+              dangerouslySetInnerHTML={{
+                __html: sanitizeHtml(document.contentSnapshot || ''),
+              }}
+            />
+          ) : (
+            <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
+              {document.contentSnapshot}
+            </p>
+          )}
         </div>
       )}
 

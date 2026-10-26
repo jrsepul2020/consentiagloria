@@ -736,8 +736,26 @@ class SupabaseService {
       );
     }
 
+    // Preflight: confirmar que existen en BD (evita FK genérico)
+    const [{ data: patientRow }, { data: templateRow }] = await Promise.all([
+      supabase.from('patients').select('id').eq('id', data.patientId).maybeSingle(),
+      supabase.from('consent_templates').select('id').eq('id', data.templateId).maybeSingle(),
+    ]);
+    if (!patientRow?.id) {
+      throw new Error(
+        'El cliente seleccionado no existe en la base de datos. Recarga y elige otro, o créalo de nuevo.'
+      );
+    }
+    const templateExists = !!templateRow?.id;
+    if (!templateExists) {
+      console.warn('Plantilla no encontrada en BD; se generará el consentimiento sin template_id.');
+    }
+
+    const category = normalizeTemplateCategory(data.category);
+
     const optimistic: Consent = {
       ...data,
+      category,
       id: `temp-${Date.now()}`,
       status: 'PENDIENTE',
       createdAt: new Date().toISOString(),
@@ -747,38 +765,81 @@ class SupabaseService {
     this.consents = [optimistic, ...this.consents];
     this.notify();
 
-    const payload = {
+    const basePayload: Record<string, unknown> = {
       patient_id: data.patientId,
-      template_id: data.templateId,
       patient_name_snapshot: data.patientNameSnapshot,
       patient_dni_snapshot: data.patientDniSnapshot,
       title: data.title,
-      category: data.category,
+      category,
       template_version: data.templateVersion,
       content_snapshot: data.contentSnapshot,
       status: 'PENDIENTE',
     };
+    if (templateExists) {
+      basePayload.template_id = data.templateId;
+    }
 
-    // INSERT mínimo (solo id). Luego leemos la fila completa — evita borrar el
-    // optimista si el SELECT amplio falla tras un INSERT ya confirmado.
-    const { data: inserted, error: insertError } = await supabase
+    // INSERT mínimo (solo id). Luego leemos la fila completa.
+    let { data: inserted, error: insertError } = await supabase
       .from('consents')
-      .insert(payload)
+      .insert(basePayload)
       .select('id')
       .single();
+
+    // Si falla por template_id (FK / NOT NULL / check), reintentar sin plantilla
+    if (
+      insertError &&
+      templateExists &&
+      /template_id|foreign key|violates/i.test(insertError.message || '')
+    ) {
+      const { template_id: _t, ...withoutTemplate } = basePayload;
+      ({ data: inserted, error: insertError } = await supabase
+        .from('consents')
+        .insert(withoutTemplate)
+        .select('id')
+        .single());
+    }
+
+    // Si falla por categoría CHECK en consents, reintentar con categoría por defecto
+    if (insertError && /category|check/i.test(insertError.message || '')) {
+      const retryPayload = {
+        ...basePayload,
+        category: 'Tratamiento estético facial',
+        ...(templateExists ? { template_id: data.templateId } : {}),
+      };
+      ({ data: inserted, error: insertError } = await supabase
+        .from('consents')
+        .insert(retryPayload)
+        .select('id')
+        .single());
+    }
 
     if (insertError || !inserted?.id) {
       console.error('Error inserting consent:', insertError);
       this.consents = this.consents.filter((c) => c.id !== optimistic.id);
       this.notify();
       const msg = errorMessage(insertError, 'No se pudo crear el consentimiento');
-      // FK / RLS → mensaje más claro
-      if (/foreign key|violates/i.test(msg)) {
+      const details =
+        typeof insertError === 'object' && insertError && 'details' in insertError
+          ? String((insertError as { details?: string }).details || '')
+          : '';
+      const combined = `${msg} ${details}`;
+      if (/patient_id/i.test(combined)) {
         throw new Error(
-          'Cliente o plantilla no existen en la base de datos. Recarga la página y vuelve a elegirlos.'
+          'El cliente no existe en la base de datos. Recarga y vuelve a seleccionarlo.'
         );
       }
-      if (/permission denied|row-level security|RLS/i.test(msg)) {
+      if (/template_id/i.test(combined)) {
+        throw new Error(
+          'La plantilla no existe en la base de datos. Ve a Plantillas, crea una y vuelve.'
+        );
+      }
+      if (/foreign key|violates/i.test(combined)) {
+        throw new Error(
+          'No se pudo vincular cliente o plantilla. Recarga la página, vuelve a elegirlos e inténtalo de nuevo.'
+        );
+      }
+      if (/permission denied|row-level security|RLS/i.test(combined)) {
         throw new Error(
           'Sin permiso para crear consentimientos. Revisa que hayas iniciado sesión y la migración RLS en Supabase.'
         );

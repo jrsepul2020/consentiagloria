@@ -5,8 +5,8 @@ import { NavTab, BottomNav } from './components/BottomNav';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { NotificationDrawer } from './components/NotificationDrawer';
-import { NewTemplateModal } from './components/NewTemplateModal';
 import { LoginPage } from './components/LoginPage';
+import { TemplateEditorView } from './components/views/TemplateEditorView';
 import { HomeView } from './components/views/HomeView';
 import { ClientsView } from './components/views/ClientsView';
 import { DocumentsView } from './components/views/DocumentsView';
@@ -28,7 +28,8 @@ type FormScreen =
   | 'nuevo-consentimiento'
   | 'ficha-cliente'
   | 'detalle-consentimiento'
-  | 'estadisticas';
+  | 'estadisticas'
+  | 'editar-plantilla';
 
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -79,7 +80,6 @@ export default function App() {
 
   const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
   const [newClientDraftName, setNewClientDraftName] = useState('');
-  const [isNewTemplateModalOpen, setIsNewTemplateModalOpen] = useState(false);
   const [templateToEdit, setTemplateToEdit] = useState<ConsentTemplate | null>(null);
 
   const [preselectedPatientId, setPreselectedPatientId] = useState<string | undefined>(undefined);
@@ -327,6 +327,12 @@ export default function App() {
     setSession(null);
   };
 
+  const openTemplateEditor = (tmpl: ConsentTemplate | null = null) => {
+    setTemplateToEdit(tmpl);
+    setFormReturnTab(activeTab === 'plantillas' ? 'plantillas' : activeTab);
+    setFormScreen('editar-plantilla');
+  };
+
   const handleSaveTemplate = (data: {
     id?: string;
     name: string;
@@ -351,6 +357,9 @@ export default function App() {
       });
       triggerToast('✓ Plantilla Creada', `"${data.name}" lista`);
     }
+    setTemplateToEdit(null);
+    setFormScreen(null);
+    setActiveTab('plantillas');
   };
 
   const handleToggleTemplateActive = (id: string, currentActive: boolean) => {
@@ -507,17 +516,22 @@ export default function App() {
             />
           )}
 
+          {formScreen === 'editar-plantilla' && (
+            <TemplateEditorView
+              templateToEdit={templateToEdit}
+              onCancel={() => {
+                setTemplateToEdit(null);
+                closeFormScreen();
+              }}
+              onSave={handleSaveTemplate}
+            />
+          )}
+
           {!isFormScreen && activeTab === 'plantillas' && (
             <TemplatesView
               templates={templates}
-              onNewTemplate={() => {
-                setTemplateToEdit(null);
-                setIsNewTemplateModalOpen(true);
-              }}
-              onEditTemplate={(tmpl) => {
-                setTemplateToEdit(tmpl);
-                setIsNewTemplateModalOpen(true);
-              }}
+              onNewTemplate={() => openTemplateEditor(null)}
+              onEditTemplate={(tmpl) => openTemplateEditor(tmpl)}
               onToggleActive={handleToggleTemplateActive}
               onUseTemplate={(tmpl) => openNewConsent(undefined, tmpl.id)}
             />
@@ -563,12 +577,6 @@ export default function App() {
         onSimulatePush={handleSimulatePush}
       />
 
-      <NewTemplateModal
-        isOpen={isNewTemplateModalOpen}
-        onClose={() => setIsNewTemplateModalOpen(false)}
-        templateToEdit={templateToEdit}
-        onSaveTemplate={handleSaveTemplate}
-      />
     </div>
   );
 }

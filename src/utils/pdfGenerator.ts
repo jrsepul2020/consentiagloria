@@ -5,6 +5,7 @@ import {
   getStorageSignedUrl,
   fetchSignatureAsDataUrl,
 } from '../lib/consentStorage';
+import { htmlToPlainText } from './htmlContent';
 
 /**
  * Builds the jsPDF instance for a consent document.
@@ -157,7 +158,8 @@ export async function buildConsentJsPdf(
   doc.setFontSize(8.5);
   doc.setTextColor(50, 50, 50);
 
-  const lines = doc.splitTextToSize(consent.contentSnapshot, contentWidth);
+  const clauseText = htmlToPlainText(consent.contentSnapshot || '');
+  const lines = doc.splitTextToSize(clauseText, contentWidth);
   const lineHeight = 4.2;
 
   for (let i = 0; i < lines.length; i++) {
