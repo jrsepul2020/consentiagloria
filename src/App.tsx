@@ -372,6 +372,21 @@ export default function App() {
   const unreadNotifCount = supabaseService.getUnreadNotificationsCount();
   const isFormScreen = formScreen !== null;
 
+  const headerTitle = (() => {
+    if (formScreen === 'nuevo-cliente') return 'Alta de paciente';
+    if (formScreen === 'nuevo-consentimiento') return 'Nuevo consentimiento';
+    if (formScreen === 'ficha-cliente') return 'Ficha del paciente';
+    if (formScreen === 'detalle-consentimiento') return 'Detalle';
+    if (formScreen === 'estadisticas') return 'Estadísticas';
+    if (formScreen === 'editar-plantilla') return 'Editar plantilla';
+    if (activeTab === 'inicio') return 'Inicio';
+    if (activeTab === 'clientes') return 'Clientes';
+    if (activeTab === 'consentimientos') return 'Consentimientos';
+    if (activeTab === 'plantillas') return 'Plantillas';
+    if (activeTab === 'ajustes') return 'Ajustes';
+    return 'Consentia';
+  })();
+
   if (session === undefined) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -413,6 +428,7 @@ export default function App() {
         )}
 
         <Header
+          title={headerTitle}
           showBack={isFormScreen || activeTab !== 'inicio'}
           onBack={() => {
             if (isFormScreen) {

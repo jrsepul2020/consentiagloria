@@ -40,16 +40,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside className="hidden lg:flex flex-col w-64 min-h-screen bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shrink-0 sticky top-0 h-screen transition-colors">
-      {/* Brand Header */}
+      {/* Brand Header — marca única en escritorio (la barra superior muestra solo la sección) */}
       <div className="px-6 py-6 border-b border-slate-100 dark:border-slate-800">
         <div className="flex items-center gap-2.5">
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-          <h1 className="font-extrabold tracking-wider text-lg bg-clip-text text-transparent bg-gradient-to-r from-rose-600 via-rose-500 to-amber-600 dark:from-rose-400 dark:via-rose-300 dark:to-amber-200 uppercase">
+          <h1 className="font-[Cormorant_Garamond,Georgia,serif] text-2xl font-semibold tracking-tight text-[#373DA2] dark:text-rose-300 leading-none">
             Consentia
           </h1>
         </div>
-        <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 mt-1 tracking-wide uppercase">
-          Gestión de Consentimientos
+        <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mt-1.5 tracking-wide">
+          Dra. Gloria Cabezas
         </p>
         <p
           className="mt-2 text-[10px] font-bold text-slate-400 dark:text-slate-500 tracking-wide"

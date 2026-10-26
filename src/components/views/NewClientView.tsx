@@ -106,24 +106,26 @@ export const NewClientView: React.FC<NewClientViewProps> = ({
             />
           </div>
 
-          <div className="flex flex-col lg:grid lg:grid-cols-2 gap-5">
+          <div className="flex flex-col sm:grid sm:grid-cols-[9.5rem_minmax(0,1fr)] gap-5">
             <div>
               <label className="text-sm font-bold text-slate-700 dark:text-slate-300 block mb-2">
                 Teléfono
               </label>
               <div className="relative">
-                <Phone className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Phone className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={9}
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+34 600..."
-                  className={`${fieldClass} pl-11 pr-4`}
+                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                  placeholder="600000000"
+                  className={`${fieldClass} pl-10 pr-3 tracking-wide`}
                 />
               </div>
             </div>
 
-            <div>
+            <div className="min-w-0">
               <label className="text-sm font-bold text-slate-700 dark:text-slate-300 block mb-2">
                 Email
               </label>

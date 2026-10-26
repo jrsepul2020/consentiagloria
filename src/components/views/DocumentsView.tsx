@@ -25,6 +25,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [internalStatusFilter, setInternalStatusFilter] = useState<'TODOS' | DocumentStatus>('TODOS');
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('Todos');
+  const [yearFilter, setYearFilter] = useState<'Todos' | number>('Todos');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [loadingMore, setLoadingMore] = useState(false);
@@ -51,9 +52,24 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     return ['Todos', ...Array.from(set).sort((a, b) => a.localeCompare(b, 'es'))];
   }, [documents]);
 
+  const years = useMemo(() => {
+    const set = new Set<number>();
+    for (const d of documents) {
+      const raw = d.signedAt || d.createdAt || '';
+      const y = Number(raw.slice(0, 4));
+      if (y >= 2000 && y <= 2100) set.add(y);
+    }
+    return Array.from(set).sort((a, b) => b - a);
+  }, [documents]);
+
   const filteredDocs = documents
     .filter((doc) => activeStatusFilter === 'TODOS' || doc.status === activeStatusFilter)
     .filter((doc) => categoryFilter === 'Todos' || doc.category === categoryFilter)
+    .filter((doc) => {
+      if (yearFilter === 'Todos') return true;
+      const raw = doc.signedAt || doc.createdAt || '';
+      return Number(raw.slice(0, 4)) === yearFilter;
+    })
     .filter((doc) => {
       if (!dateFrom && !dateTo) return true;
       const d = (doc.signedAt || doc.createdAt || '').slice(0, 10);
@@ -175,6 +191,39 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </button>
         ))}
       </div>
+
+      {years.length > 0 && (
+        <div>
+          <label className="text-[10px] font-bold uppercase text-slate-400 block mb-1.5">Año</label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setYearFilter('Todos')}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold ${
+                yearFilter === 'Todos'
+                  ? 'bg-[#bd003c] text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              Todos
+            </button>
+            {years.map((y) => (
+              <button
+                key={y}
+                type="button"
+                onClick={() => setYearFilter(y)}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold ${
+                  yearFilter === y
+                    ? 'bg-[#bd003c] text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                {y}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2">
         <div>
