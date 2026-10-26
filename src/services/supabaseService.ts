@@ -712,6 +712,108 @@ class SupabaseService {
   }
 
   /**
+   * Devuelve un UUID de plantilla que exista en BD.
+   * Si el ID elegido no está, busca por nombre o crea una plantilla con el snapshot
+   * (necesario cuando consents.template_id sigue siendo NOT NULL).
+   */
+  private async resolveTemplateIdForConsent(data: {
+    templateId: string;
+    title: string;
+    category: string;
+    templateVersion: number;
+    contentSnapshot: string;
+  }): Promise<string> {
+    const category = normalizeTemplateCategory(data.category);
+    const title = (data.title || '').trim();
+
+    if (isUuid(data.templateId)) {
+      const { data: row, error } = await supabase
+        .from('consent_templates')
+        .select('id')
+        .eq('id', data.templateId)
+        .maybeSingle();
+      if (!error && row?.id) return row.id as string;
+      if (error) console.warn('Preflight plantilla por id:', errorMessage(error, 'error'));
+    }
+
+    if (title) {
+      const { data: byName } = await supabase
+        .from('consent_templates')
+        .select('id')
+        .eq('name', title)
+        .limit(1);
+      if (byName?.[0]?.id) return byName[0].id as string;
+    }
+
+    const insertPayload: Record<string, unknown> = {
+      name: title || 'Consentimiento',
+      category,
+      content: data.contentSnapshot || '',
+      version: data.templateVersion || 1,
+      active: true,
+    };
+
+    let { data: created, error: createErr } = await supabase
+      .from('consent_templates')
+      .insert(insertPayload)
+      .select('id')
+      .single();
+
+    if (createErr && /active|column/i.test(createErr.message || '')) {
+      const { active: _a, ...minimal } = insertPayload;
+      ({ data: created, error: createErr } = await supabase
+        .from('consent_templates')
+        .insert(minimal)
+        .select('id')
+        .single());
+    }
+
+    if (createErr && /category|check/i.test(createErr.message || '')) {
+      ({ data: created, error: createErr } = await supabase
+        .from('consent_templates')
+        .insert({
+          name: insertPayload.name,
+          category: 'Tratamiento estético facial',
+          content: insertPayload.content,
+          version: insertPayload.version,
+        })
+        .select('id')
+        .single());
+    }
+
+    if (!createErr && created?.id) {
+      void this.fetchTemplates();
+      return created.id as string;
+    }
+
+    console.warn('No se pudo crear plantilla ad-hoc; intentando seed:', createErr);
+    await this.ensureDefaultTemplates();
+
+    const localMatch =
+      this.templates.find((t) => isUuid(t.id) && t.name.trim() === title) ||
+      this.templates.find((t) => isUuid(t.id) && t.active !== false);
+
+    if (localMatch) {
+      const { data: verified } = await supabase
+        .from('consent_templates')
+        .select('id')
+        .eq('id', localMatch.id)
+        .maybeSingle();
+      if (verified?.id) return verified.id as string;
+    }
+
+    const { data: anyRows } = await supabase
+      .from('consent_templates')
+      .select('id')
+      .limit(1);
+    if (anyRows?.[0]?.id) return anyRows[0].id as string;
+
+    throw new Error(
+      'No hay plantillas en la base de datos. Ve a Plantillas, pulsa cargar ejemplos o crea una, y vuelve a intentarlo.'
+    );
+  }
+
+  /**
    * Crea el consentimiento y espera el UUID real.
    * Evita abrir el detalle con id temp- que luego “desaparece”.
    */
@@ -730,32 +832,31 @@ class SupabaseService {
         'El cliente no está guardado en la base de datos. Crea o elige un cliente real e inténtalo de nuevo.'
       );
     }
-    if (!isUuid(data.templateId)) {
-      throw new Error(
-        'La plantilla no es válida. Ve a Plantillas, crea una y vuelve a intentarlo.'
-      );
-    }
 
-    // Preflight: confirmar que existen en BD (evita FK genérico)
-    const [{ data: patientRow }, { data: templateRow }] = await Promise.all([
-      supabase.from('patients').select('id').eq('id', data.patientId).maybeSingle(),
-      supabase.from('consent_templates').select('id').eq('id', data.templateId).maybeSingle(),
-    ]);
+    const { data: patientRow, error: patientErr } = await supabase
+      .from('patients')
+      .select('id')
+      .eq('id', data.patientId)
+      .maybeSingle();
+    if (patientErr) {
+      throw new Error(errorMessage(patientErr, 'No se pudo verificar el cliente'));
+    }
     if (!patientRow?.id) {
       throw new Error(
         'El cliente seleccionado no existe en la base de datos. Recarga y elige otro, o créalo de nuevo.'
       );
     }
-    const templateExists = !!templateRow?.id;
-    if (!templateExists) {
-      console.warn('Plantilla no encontrada en BD; se generará el consentimiento sin template_id.');
-    }
 
     const category = normalizeTemplateCategory(data.category);
+    const resolvedTemplateId = await this.resolveTemplateIdForConsent({
+      ...data,
+      category,
+    });
 
     const optimistic: Consent = {
       ...data,
       category,
+      templateId: resolvedTemplateId,
       id: `temp-${Date.now()}`,
       status: 'PENDIENTE',
       createdAt: new Date().toISOString(),
@@ -767,6 +868,7 @@ class SupabaseService {
 
     const basePayload: Record<string, unknown> = {
       patient_id: data.patientId,
+      template_id: resolvedTemplateId,
       patient_name_snapshot: data.patientNameSnapshot,
       patient_dni_snapshot: data.patientDniSnapshot,
       title: data.title,
@@ -775,9 +877,6 @@ class SupabaseService {
       content_snapshot: data.contentSnapshot,
       status: 'PENDIENTE',
     };
-    if (templateExists) {
-      basePayload.template_id = data.templateId;
-    }
 
     // INSERT mínimo (solo id). Luego leemos la fila completa.
     let { data: inserted, error: insertError } = await supabase
@@ -786,30 +885,24 @@ class SupabaseService {
       .select('id')
       .single();
 
-    // Si falla por template_id (FK / NOT NULL / check), reintentar sin plantilla
+    // Si falla por categoría CHECK en consents, reintentar con categoría por defecto
+    if (insertError && /category|check/i.test(insertError.message || '')) {
+      ({ data: inserted, error: insertError } = await supabase
+        .from('consents')
+        .insert({ ...basePayload, category: 'Tratamiento estético facial' })
+        .select('id')
+        .single());
+    }
+
+    // Último recurso: BD con template_id opcional y FK roto
     if (
       insertError &&
-      templateExists &&
-      /template_id|foreign key|violates/i.test(insertError.message || '')
+      /template_id|foreign key/i.test(insertError.message || '')
     ) {
       const { template_id: _t, ...withoutTemplate } = basePayload;
       ({ data: inserted, error: insertError } = await supabase
         .from('consents')
         .insert(withoutTemplate)
-        .select('id')
-        .single());
-    }
-
-    // Si falla por categoría CHECK en consents, reintentar con categoría por defecto
-    if (insertError && /category|check/i.test(insertError.message || '')) {
-      const retryPayload = {
-        ...basePayload,
-        category: 'Tratamiento estético facial',
-        ...(templateExists ? { template_id: data.templateId } : {}),
-      };
-      ({ data: inserted, error: insertError } = await supabase
-        .from('consents')
-        .insert(retryPayload)
         .select('id')
         .single());
     }
@@ -829,14 +922,14 @@ class SupabaseService {
           'El cliente no existe en la base de datos. Recarga y vuelve a seleccionarlo.'
         );
       }
-      if (/template_id/i.test(combined)) {
+      if (/null value.*template_id|template_id.*not-null|not null.*template_id/i.test(combined)) {
         throw new Error(
-          'La plantilla no existe en la base de datos. Ve a Plantillas, crea una y vuelve.'
+          'La base de datos exige una plantilla. Ejecuta en Supabase la migración 20261026_consents_template_optional.sql o crea una plantilla y reintenta.'
         );
       }
-      if (/foreign key|violates/i.test(combined)) {
+      if (/template_id|foreign key/i.test(combined)) {
         throw new Error(
-          'No se pudo vincular cliente o plantilla. Recarga la página, vuelve a elegirlos e inténtalo de nuevo.'
+          'No se pudo vincular la plantilla. Recarga, elige otra plantilla (o créala en Plantillas) e inténtalo de nuevo.'
         );
       }
       if (/permission denied|row-level security|RLS/i.test(combined)) {
@@ -851,7 +944,7 @@ class SupabaseService {
     this.pinConsent(realId);
 
     let row: Record<string, unknown> | null = null;
-    let { data: full, error: selectError } = await supabase
+    const { data: full, error: selectError } = await supabase
       .from('consents')
       .select(CONSENT_LIST_COLUMNS_LEGACY)
       .eq('id', realId)
@@ -862,11 +955,11 @@ class SupabaseService {
       row = {
         id: realId,
         patient_id: data.patientId,
-        template_id: data.templateId,
+        template_id: resolvedTemplateId,
         patient_name_snapshot: data.patientNameSnapshot,
         patient_dni_snapshot: data.patientDniSnapshot,
         title: data.title,
-        category: data.category,
+        category,
         template_version: data.templateVersion,
         content_snapshot: data.contentSnapshot,
         status: 'PENDIENTE',

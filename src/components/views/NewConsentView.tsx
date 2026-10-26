@@ -110,8 +110,6 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
     );
   }, [sortedPatients, patientSearch]);
 
-  const recentPatients = useMemo(() => sortedPatients.slice(0, 8), [sortedPatients]);
-
   const filteredTemplates = useMemo(() => {
     return latestActiveTemplates.filter((t) => {
       const matchesCat = categoryFilter === 'Todos' || t.category === categoryFilter;
@@ -164,15 +162,24 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
       if (selectedPatient.id.startsWith('temp-')) return;
       setSaving(true);
       try {
+        // Releer plantillas por si el ID local no existe ya en BD
+        const fresh = await supabaseService.ensureDefaultTemplates();
+        const tmpl =
+          fresh.find((t) => t.id === selectedTemplate.id) ||
+          fresh.find(
+            (t) =>
+              t.name.trim().toLowerCase() === selectedTemplate.name.trim().toLowerCase()
+          ) ||
+          selectedTemplate;
         await onCreateConsent({
           patientId: selectedPatient.id,
           patientNameSnapshot: selectedPatient.fullName,
           patientDniSnapshot: selectedPatient.dni,
-          templateId: selectedTemplate.id,
-          title: documentTitle.trim() || selectedTemplate.name,
-          category: selectedTemplate.category,
-          templateVersion: selectedTemplate.version,
-          contentSnapshot: selectedTemplate.content,
+          templateId: tmpl.id,
+          title: documentTitle.trim() || tmpl.name,
+          category: tmpl.category || selectedTemplate.category,
+          templateVersion: tmpl.version || selectedTemplate.version,
+          contentSnapshot: tmpl.content || selectedTemplate.content,
         });
       } finally {
         setSaving(false);
@@ -238,35 +245,6 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
                 className="w-full pl-10 pr-4 py-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
               />
             </div>
-
-            {!patientSearch.trim() && recentPatients.length > 0 && (
-              <div>
-                <p className="text-xs font-bold text-slate-500 mb-2">Recientes</p>
-                <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
-                  {recentPatients.map((p) => (
-                    <button
-                      type="button"
-                      key={p.id}
-                      onClick={() => setSelectedPatientId(p.id)}
-                      className={`flex flex-col items-center gap-1.5 min-w-[4.5rem] ${
-                        selectedPatientId === p.id ? 'opacity-100' : 'opacity-80'
-                      }`}
-                    >
-                      <AvatarInitials
-                        name={p.fullName}
-                        size="lg"
-                        className={
-                          selectedPatientId === p.id ? 'ring-2 ring-[#bd003c] ring-offset-2' : ''
-                        }
-                      />
-                      <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 text-center leading-tight line-clamp-2 w-16">
-                        {displayNameBySurname(p.fullName)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             <div className="max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 -mx-1">
               {filteredPatients.map((p) => {
