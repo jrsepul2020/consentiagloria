@@ -1,5 +1,6 @@
 import React from 'react';
 import { Home, Users, FileCheck, LayoutTemplate, Settings, Moon, Sun, Zap, ShieldCheck, LogOut } from 'lucide-react';
+import { APP_VERSION, formatAppUpdatedAt, getAppVersionLabel } from '../appVersion';
 
 export type NavTab = 'inicio' | 'clientes' | 'consentimientos' | 'plantillas' | 'ajustes';
 
@@ -49,6 +50,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 mt-1 tracking-wide uppercase">
           Gestión de Consentimientos
+        </p>
+        <p
+          className="mt-2 text-[10px] font-bold text-slate-400 dark:text-slate-500 tracking-wide"
+          title={`Versión ${APP_VERSION} · Actualizado ${formatAppUpdatedAt()}`}
+        >
+          {getAppVersionLabel()}
         </p>
       </div>
 
@@ -120,9 +127,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Security badge */}
         <div className="flex items-center gap-2 px-3 py-2 text-[10px] text-slate-400 dark:text-slate-500">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
           <span>Cifrado RGPD · Supabase Cloud</span>
         </div>
+        <p className="px-3 pb-1 text-[10px] font-semibold text-slate-400 dark:text-slate-500">
+          App {APP_VERSION} · {formatAppUpdatedAt()}
+        </p>
       </div>
     </aside>
   );

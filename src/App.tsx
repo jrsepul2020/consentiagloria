@@ -218,9 +218,19 @@ export default function App() {
     dni: string;
     phone: string;
     email: string;
+    noteDate?: string;
+    noteBody?: string;
   }) => {
     try {
-      const newPatient = await supabaseService.addPatientAsync(patientData);
+      const { noteDate, noteBody, ...patientFields } = patientData;
+      const newPatient = await supabaseService.addPatientAsync(patientFields);
+      if (noteBody?.trim()) {
+        try {
+          await supabaseService.addPatientNote(newPatient.id, noteBody.trim(), noteDate);
+        } catch (noteErr) {
+          console.warn('Cliente creado pero la nota no se guardó:', noteErr);
+        }
+      }
       triggerToast('✓ Cliente Registrado', `${newPatient.fullName} añadido al expediente.`);
 
       if (openClientFromConsent) {

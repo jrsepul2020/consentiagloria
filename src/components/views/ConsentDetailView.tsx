@@ -372,23 +372,13 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
                   </button>
                 </div>
               )}
-              <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-4">
-                <div className="flex items-center justify-between mb-2 gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Firma</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
-                      Trackpad Mac: haz clic y arrastra. Force Touch varía el grosor. También
-                      dedo, Pencil o ratón.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={clearCanvas}
-                    className="shrink-0 text-xs font-bold text-[#bd003c] flex items-center gap-1"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Limpiar
-                  </button>
+              <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Firma</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                    Trackpad Mac: haz clic y arrastra. Force Touch varía el grosor. También dedo,
+                    Pencil o ratón.
+                  </p>
                 </div>
                 <div className="relative w-full">
                   <canvas
@@ -408,6 +398,16 @@ export const ConsentDetailView: React.FC<ConsentDetailViewProps> = ({
                     </div>
                   )}
                 </div>
+                {hasSignature && (
+                  <button
+                    type="button"
+                    onClick={clearCanvas}
+                    className="w-full py-3 rounded-xl border-2 border-[#bd003c]/30 text-[#bd003c] font-extrabold text-sm flex items-center justify-center gap-2 bg-rose-50/80 dark:bg-rose-950/30"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Limpiar firma y volver a firmar
+                  </button>
+                )}
               </div>
 
               <label className="flex items-start gap-3 p-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 cursor-pointer">

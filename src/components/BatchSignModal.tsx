@@ -159,17 +159,7 @@ export const BatchSignModal: React.FC<BatchSignModalProps> = ({
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Firma</p>
-              <button
-                type="button"
-                onClick={clearCanvas}
-                className="text-xs font-bold text-[#bd003c] flex items-center gap-1"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Limpiar
-              </button>
-            </div>
+            <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-2">Firma</p>
             <div className="relative w-full">
               <canvas
                 ref={canvasRef}
@@ -186,6 +176,16 @@ export const BatchSignModal: React.FC<BatchSignModalProps> = ({
                 </div>
               )}
             </div>
+            {hasSignature && (
+              <button
+                type="button"
+                onClick={clearCanvas}
+                className="w-full mt-2 py-3 rounded-xl border-2 border-[#bd003c]/30 text-[#bd003c] font-extrabold text-sm flex items-center justify-center gap-2 bg-rose-50/80 dark:bg-rose-950/30"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Limpiar firma y volver a firmar
+              </button>
+            )}
           </div>
 
           <label className="flex items-start gap-3 cursor-pointer">

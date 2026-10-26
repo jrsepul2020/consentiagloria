@@ -4,9 +4,7 @@ import {
   Users,
   LayoutTemplate,
   Bell,
-  Shield,
-  Download,
-  Languages,
+  KeyRound,
   LogOut,
   ChevronRight,
   Moon,
@@ -18,6 +16,7 @@ import {
 import { ClinicSettings } from '../../types';
 import { getStorageSignedUrl } from '../../lib/consentStorage';
 import { supabaseService } from '../../services/supabaseService';
+import { updatePassword } from '../../lib/supabaseClient';
 
 interface SettingsViewProps {
   clinicSettings: ClinicSettings;
@@ -42,6 +41,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onOpenTemplates,
 }) => {
   const [editingClinic, setEditingClinic] = useState(false);
+  const [accountPanel, setAccountPanel] = useState<'password' | 'users' | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
+  const [passwordErr, setPasswordErr] = useState<string | null>(null);
+  const [savingPassword, setSavingPassword] = useState(false);
   const [clinicName, setClinicName] = useState(clinicSettings.clinicName);
   const [professionalName, setProfessionalName] = useState(clinicSettings.professionalName);
   const [professionalTitle, setProfessionalTitle] = useState(clinicSettings.professionalTitle);
@@ -194,6 +199,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setTimeout(() => setSaved(false), 2500);
   };
 
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordErr(null);
+    setPasswordMsg(null);
+    if (newPassword.length < 8) {
+      setPasswordErr('La contraseña debe tener al menos 8 caracteres.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordErr('Las contraseñas no coinciden.');
+      return;
+    }
+    setSavingPassword(true);
+    const { error } = await updatePassword(newPassword);
+    setSavingPassword(false);
+    if (error) {
+      setPasswordErr(error.message || 'No se pudo cambiar la contraseña.');
+      return;
+    }
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordMsg('Contraseña actualizada correctamente.');
+  };
+
   const menuItems = [
     {
       icon: Building2,
@@ -201,10 +230,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       onClick: () => setEditingClinic(true),
     },
     {
+      icon: KeyRound,
+      label: 'Cambiar contraseña',
+      onClick: () => setAccountPanel('password'),
+    },
+    {
       icon: Users,
-      label: 'Usuarios',
-      onClick: () => {},
-      soon: true,
+      label: 'Usuarios de la clínica',
+      onClick: () => setAccountPanel('users'),
     },
     {
       icon: LayoutTemplate,
@@ -216,28 +249,116 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       label: 'Notificaciones',
       onClick: onSimulatePush,
     },
-    {
-      icon: Shield,
-      label: 'Seguridad',
-      onClick: () => {},
-      soon: true,
-    },
-    {
-      icon: Download,
-      label: 'Exportar datos',
-      onClick: () => {},
-      soon: true,
-    },
-    {
-      icon: Languages,
-      label: 'Idioma',
-      detail: 'Español',
-      onClick: () => {},
-      soon: true,
-    },
   ];
 
   const showDoctorPad = !doctorPreview || redrawingDoctorSig;
+
+  if (accountPanel === 'password') {
+    return (
+      <div className="max-w-xl mx-auto pb-28 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
+            Cambiar contraseña
+          </h2>
+          <button
+            type="button"
+            onClick={() => {
+              setAccountPanel(null);
+              setPasswordErr(null);
+              setPasswordMsg(null);
+            }}
+            className="text-sm font-bold text-[#bd003c]"
+          >
+            Cerrar
+          </button>
+        </div>
+        {userEmail && (
+          <p className="text-sm text-slate-500 font-medium">Cuenta: {userEmail}</p>
+        )}
+        <form
+          onSubmit={handleChangePassword}
+          className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 space-y-4"
+        >
+          <div>
+            <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1.5">
+              Nueva contraseña
+            </label>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1.5">
+              Repetir contraseña
+            </label>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm font-medium outline-hidden focus:ring-2 focus:ring-[#bd003c]"
+            />
+          </div>
+          {passwordErr && (
+            <p className="text-xs font-bold text-[#bd003c]">{passwordErr}</p>
+          )}
+          {passwordMsg && (
+            <p className="text-xs font-bold text-emerald-600 flex items-center gap-1">
+              <Check className="w-3.5 h-3.5" /> {passwordMsg}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={savingPassword}
+            className="w-full py-3.5 rounded-2xl bg-[#bd003c] text-white font-extrabold text-sm disabled:opacity-50"
+          >
+            {savingPassword ? 'Guardando…' : 'Guardar contraseña'}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  if (accountPanel === 'users') {
+    return (
+      <div className="max-w-xl mx-auto pb-28 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
+            Usuarios de la clínica
+          </h2>
+          <button
+            type="button"
+            onClick={() => setAccountPanel(null)}
+            className="text-sm font-bold text-[#bd003c]"
+          >
+            Cerrar
+          </button>
+        </div>
+        <div className="rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 space-y-3 text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+          <p className="font-bold text-slate-900 dark:text-white">¿Cómo crear un usuario nuevo?</p>
+          <p>
+            Por seguridad, los usuarios de acceso se gestionan en{' '}
+            <strong>Supabase → Authentication → Users</strong>:
+          </p>
+          <ol className="list-decimal pl-5 space-y-1.5 text-sm">
+            <li>Entra al proyecto de Supabase de la clínica.</li>
+            <li>Authentication → Users → <strong>Invite user</strong> (o Add user).</li>
+            <li>Indica el email del personal y envía la invitación.</li>
+            <li>La persona define su contraseña desde el email (o la asignas tú).</li>
+          </ol>
+          <p className="text-xs text-slate-500 pt-2">
+            Desde esta app sí puedes <strong>cambiar tu propia contraseña</strong> (menú Cambiar
+            contraseña) y <strong>recuperarla</strong> desde el login. Crear usuarios requiere
+            permisos de administrador en Supabase (no se hace con la clave pública de la app).
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (editingClinic) {
     return (
@@ -412,14 +533,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <span className="flex-1 font-bold text-sm text-slate-900 dark:text-white">
                 {item.label}
               </span>
-              {item.soon && (
-                <span className="text-[9px] font-extrabold uppercase text-slate-400 bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">
-                  Pronto
-                </span>
-              )}
-              {item.detail && (
-                <span className="text-xs text-slate-400 font-medium">{item.detail}</span>
-              )}
               <ChevronRight className="w-4 h-4 text-slate-400" />
             </button>
           );
