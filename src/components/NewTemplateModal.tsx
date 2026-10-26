@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, LayoutTemplate, Check, FileText, Tag, Sparkles } from 'lucide-react';
 import { ConsentTemplate } from '../types';
+import { TEMPLATE_CATEGORIES } from '../constants/templateCategories';
 
 interface NewTemplateModalProps {
   isOpen: boolean;
@@ -16,14 +17,7 @@ interface NewTemplateModalProps {
   }) => void;
 }
 
-const COMMON_CATEGORIES = [
-  'Tratamiento estético facial',
-  'Cirugía ambulatoria',
-  'Dermatología clínica',
-  'Medicina estética corporal',
-  'Odontología / Cirugía oral',
-  'Medicina general',
-];
+const COMMON_CATEGORIES: string[] = [...TEMPLATE_CATEGORIES];
 
 export const NewTemplateModal: React.FC<NewTemplateModalProps> = ({
   isOpen,

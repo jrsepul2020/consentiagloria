@@ -11,6 +11,7 @@ import {
 import { initialTemplates, initialClinicSettings } from '../data/initialData';
 import { generateAndUploadConsentPdf } from '../utils/pdfGenerator';
 import { uploadConsentSignature, uploadDoctorSignature } from '../lib/consentStorage';
+import { normalizeTemplateCategory } from '../utils/consentHelpers';
 
 export const PAGE_SIZE_PATIENTS = 40;
 export const PAGE_SIZE_CONSENTS = 30;
@@ -93,12 +94,13 @@ function mapTemplate(row: Record<string, unknown>): ConsentTemplate {
   return {
     id: row.id as string,
     name: row.name as string,
-    category: row.category as string,
-    content: row.content as string,
-    version: row.version as number,
-    active: row.active as boolean,
-    createdAt: row.created_at as string,
-    updatedAt: row.updated_at as string,
+    category: (row.category as string) || '',
+    content: (row.content as string) || '',
+    version: Number(row.version) || 1,
+    // Si la columna no existe o viene null, tratar como activa
+    active: row.active === false || row.active === 'false' ? false : true,
+    createdAt: (row.created_at as string) || new Date().toISOString(),
+    updatedAt: (row.updated_at as string) || new Date().toISOString(),
   };
 }
 
@@ -181,6 +183,11 @@ class SupabaseService {
    * Hay que llamarlo tras login (el constructor no tiene auth todavía).
    */
   public async reloadFromServer() {
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session) {
+      console.warn('reloadFromServer: sin sesión autenticada todavía');
+      return;
+    }
     this.templatesSeedAttempted = false;
     await this.fetchAll();
     await this.initRealtimeOnly();
@@ -335,7 +342,14 @@ class SupabaseService {
     this.totalConsentsCache = total.count ?? 0;
   }
 
+  private lastTemplatesError: string | null = null;
+
+  public getLastTemplatesError(): string | null {
+    return this.lastTemplatesError;
+  }
+
   private async fetchTemplates() {
+    this.lastTemplatesError = null;
     const { data, error } = await supabase
       .from('consent_templates')
       .select('*')
@@ -343,7 +357,13 @@ class SupabaseService {
 
     if (error) {
       console.error('Error fetching templates:', error);
+      this.lastTemplatesError = errorMessage(error, 'Error al leer plantillas');
       this.templates = [];
+      // Intentar sembrar igual (si el SELECT falla por vacío/RLS raro, el INSERT puede funcionar)
+      if (!this.templatesSeedAttempted) {
+        this.templatesSeedAttempted = true;
+        await this.seedDefaultTemplates();
+      }
       return;
     }
 
@@ -360,8 +380,15 @@ class SupabaseService {
     }
   }
 
-  /** Inserta plantillas de ejemplo si la tabla está vacía. */
+  /** Inserta plantillas de ejemplo si la tabla está vacía. Devuelve las cargadas. */
   public async ensureDefaultTemplates(): Promise<ConsentTemplate[]> {
+    this.lastTemplatesError = null;
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session) {
+      this.lastTemplatesError = 'Debes iniciar sesión para crear plantillas.';
+      return [];
+    }
+
     const { data, error } = await supabase
       .from('consent_templates')
       .select('*')
@@ -373,6 +400,10 @@ class SupabaseService {
       return this.getTemplates();
     }
 
+    if (error) {
+      this.lastTemplatesError = errorMessage(error, 'No se pueden leer plantillas');
+    }
+
     this.templatesSeedAttempted = false;
     await this.seedDefaultTemplates();
     this.notify();
@@ -380,54 +411,75 @@ class SupabaseService {
   }
 
   private async seedDefaultTemplates() {
-    const rows = initialTemplates.map((t) => ({
+    const fullRows = initialTemplates.map((t) => ({
       name: t.name,
-      category: t.category,
+      category: normalizeTemplateCategory(t.category),
       content: t.content,
       version: t.version,
       active: true,
     }));
+    // Variante mínima por si la BD no tiene columna active
+    const minimalRows = initialTemplates.map((t) => ({
+      name: t.name,
+      category: normalizeTemplateCategory(t.category),
+      content: t.content,
+      version: t.version,
+    }));
 
-    const { data: inserted, error } = await supabase
-      .from('consent_templates')
-      .insert(rows)
-      .select('*');
+    const tryInsert = async (rows: Record<string, unknown>[]) => {
+      // 1) INSERT sin RETURNING (evita fallo si SELECT RLS bloquea el returning)
+      const { error: insertErr } = await supabase.from('consent_templates').insert(rows);
+      if (insertErr) return insertErr;
+      return null;
+    };
 
-    if (error) {
-      console.error('Error seeding templates:', error);
-      // Reintento uno a uno por si el batch falla
-      const created: ConsentTemplate[] = [];
-      for (const row of rows) {
-        const { data: one, error: oneErr } = await supabase
-          .from('consent_templates')
-          .insert(row)
-          .select('*')
-          .single();
+    let err = await tryInsert(fullRows);
+    if (err && /active|column/i.test(err.message || '')) {
+      err = await tryInsert(minimalRows);
+    }
+
+    if (err) {
+      console.error('Error seeding templates:', err);
+      this.lastTemplatesError = errorMessage(
+        err,
+        'No se pudieron crear plantillas. Ejecuta el SQL de seed en Supabase.'
+      );
+      // Último recurso: una a una
+      for (const row of fullRows) {
+        const { error: oneErr } = await supabase.from('consent_templates').insert(row);
         if (oneErr) {
-          console.error('Error seeding template', row.name, oneErr);
-          continue;
+          const { error: minErr } = await supabase
+            .from('consent_templates')
+            .insert({
+              name: row.name,
+              category: row.category,
+              content: row.content,
+              version: row.version,
+            });
+          if (minErr) console.error('Error seeding template', row.name, minErr);
         }
-        if (one) created.push(mapTemplate(one as Record<string, unknown>));
       }
-      if (created.length > 0) {
-        this.templates = created.sort((a, b) =>
-          a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
-        );
-      }
-      return;
     }
 
-    if (inserted && inserted.length > 0) {
-      this.templates = (inserted as unknown as Record<string, unknown>[]).map(mapTemplate);
-      return;
-    }
-
-    const { data } = await supabase
+    const { data, error: readErr } = await supabase
       .from('consent_templates')
       .select('*')
       .order('name', { ascending: true });
+
+    if (readErr) {
+      this.lastTemplatesError = errorMessage(
+        readErr,
+        'Plantillas creadas pero no se pueden leer (permisos RLS). Ejecuta 20261022_seed_consent_templates.sql'
+      );
+      return;
+    }
+
     if (data && data.length > 0) {
       this.templates = (data as unknown as Record<string, unknown>[]).map(mapTemplate);
+      this.lastTemplatesError = null;
+    } else if (!this.lastTemplatesError) {
+      this.lastTemplatesError =
+        'La tabla de plantillas sigue vacía. Ejecuta en Supabase: supabase/migrations/20261022_seed_consent_templates.sql';
     }
   }
 
@@ -1087,10 +1139,11 @@ class SupabaseService {
     version?: number;
   }): ConsentTemplate {
     const version = data.version || 1;
+    const category = normalizeTemplateCategory(data.category);
     const optimistic: ConsentTemplate = {
       id: `temp-${Date.now()}`,
       name: data.name,
-      category: data.category,
+      category,
       content: data.content,
       version,
       active: true,
@@ -1105,7 +1158,7 @@ class SupabaseService {
       .from('consent_templates')
       .insert({
         name: data.name,
-        category: data.category,
+        category,
         content: data.content,
         version,
         active: true,

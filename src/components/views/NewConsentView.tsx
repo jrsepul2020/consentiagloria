@@ -60,7 +60,8 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
   );
 
   const latestActiveTemplates = useMemo(() => {
-    const active = templates.filter((t) => t.active && isPersistedId(t.id));
+    // active !== false: plantillas sin columna active o con null siguen visibles
+    const active = templates.filter((t) => t.active !== false && isPersistedId(t.id));
     const mapByName = new Map<string, ConsentTemplate>();
     active.forEach((tmpl) => {
       const key = tmpl.name.trim().toLowerCase();
@@ -71,6 +72,22 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
       a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
     );
   }, [templates]);
+
+  // Al llegar al paso tratamiento, intentar cargar/sembrar plantillas automáticamente
+  useEffect(() => {
+    if (step !== 2) return;
+    if (latestActiveTemplates.length > 0) return;
+    let cancelled = false;
+    setSeedingTemplates(true);
+    void supabaseService
+      .ensureDefaultTemplates()
+      .finally(() => {
+        if (!cancelled) setSeedingTemplates(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, latestActiveTemplates.length]);
 
   const categories = useMemo(() => {
     const set = new Set(latestActiveTemplates.map((t) => t.category).filter(Boolean));
@@ -309,9 +326,15 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
             {latestActiveTemplates.length === 0 && (
               <div className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800 rounded-xl px-3 py-3 space-y-3">
                 <p>
-                  No hay plantillas en la base de datos. Puedes cargar las de ejemplo o crearlas
-                  en <strong>Plantillas</strong>.
+                  {seedingTemplates
+                    ? 'Cargando plantillas…'
+                    : 'No hay plantillas en la base de datos.'}
                 </p>
+                {supabaseService.getLastTemplatesError() && (
+                  <p className="text-xs font-medium opacity-90">
+                    {supabaseService.getLastTemplatesError()}
+                  </p>
+                )}
                 <button
                   type="button"
                   disabled={seedingTemplates}
@@ -320,9 +343,10 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
                     try {
                       const list = await supabaseService.ensureDefaultTemplates();
                       if (list.length === 0) {
-                        alert(
-                          'No se pudieron crear plantillas. Comprueba que hayas iniciado sesión y que la migración RLS esté aplicada en Supabase.'
-                        );
+                        const detail =
+                          supabaseService.getLastTemplatesError() ||
+                          'Ejecuta en Supabase el SQL: 20261022_seed_consent_templates.sql';
+                        alert(detail);
                       }
                     } finally {
                       setSeedingTemplates(false);
@@ -330,7 +354,7 @@ export const NewConsentView: React.FC<NewConsentViewProps> = ({
                   }}
                   className="w-full py-2.5 rounded-xl bg-[#373DA2] text-white text-xs font-extrabold disabled:opacity-60"
                 >
-                  {seedingTemplates ? 'Creando plantillas…' : 'Cargar plantillas de ejemplo'}
+                  {seedingTemplates ? 'Creando plantillas…' : 'Reintentar / cargar ejemplos'}
                 </button>
               </div>
             )}
